@@ -123,6 +123,15 @@ function ttnText_(value) {
   return value === null || value === undefined ? "" : String(value);
 }
 
+function ttnWorkDate_(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return Utilities.formatDate(value, TTN_TIME_ZONE, "yyyy-MM-dd");
+  }
+  const text = ttnText_(value).trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? match[1] + "-" + match[2] + "-" + match[3] : text;
+}
+
 function ttnStatus_() {
   const count = ttnRows_(ttnSheet_("Users"), TTN_USER_COLUMNS)
     .filter(function (row) { return String(row[0] || "").trim(); }).length;
@@ -218,7 +227,7 @@ function ttnAttendanceFromRow_(row) {
   if (!String(row[0] || "").trim()) return null;
   return {
     id: String(row[0]), user_id: String(row[1]), username: String(row[2]), name: String(row[3]),
-    role: ttnNormalizeRole_(row[4]), work_date: ttnText_(row[5]), check_in_at: ttnText_(row[6]),
+    role: ttnNormalizeRole_(row[4]), work_date: ttnWorkDate_(row[5]), check_in_at: ttnText_(row[6]),
     check_in_device_at: ttnText_(row[7]), check_in_lat: Number(row[8]), check_in_lng: Number(row[9]),
     check_in_accuracy: Number(row[10] || 0), check_in_file_id: String(row[11]),
     check_out_at: ttnText_(row[12]) || null, check_out_device_at: ttnText_(row[13]) || null,
@@ -280,7 +289,7 @@ function ttnRecordAttendance_(input) {
     const values = ttnRows_(sheet, TTN_ATTENDANCE_COLUMNS);
     let existingIndex = -1;
     for (let index = 0; index < values.length; index += 1) {
-      if (String(values[index][0] || "").trim() && String(values[index][1]) === user.id && ttnText_(values[index][5]) === workDate) {
+      if (String(values[index][0] || "").trim() && String(values[index][1]) === user.id && ttnWorkDate_(values[index][5]) === workDate) {
         existingIndex = index;
         break;
       }
@@ -338,7 +347,7 @@ function ttnUpdateAttendance_(input) {
     const userId = String(rows[index][1]);
     const workDate = Utilities.formatDate(checkInAt, TTN_TIME_ZONE, "yyyy-MM-dd");
     const duplicate = rows.some(function (row, rowIndex) {
-      return rowIndex !== index && String(row[0] || "").trim() && String(row[1]) === userId && ttnText_(row[5]) === workDate;
+      return rowIndex !== index && String(row[0] || "").trim() && String(row[1]) === userId && ttnWorkDate_(row[5]) === workDate;
     });
     if (duplicate) throw new Error("duplicate_work_date");
 

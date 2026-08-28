@@ -27,6 +27,7 @@ type Attendance = {
 
 type ApiResponse = Record<string, unknown> & { ok?: boolean; error?: string };
 type View = "today" | "history" | "users" | "attendance-management";
+type LocationHelp = { href: string | null; instructions: string };
 
 const roleLabels: Record<Role, string> = {
   user: "ผู้ใช้งาน",
@@ -74,24 +75,72 @@ function thaiError(error: unknown) {
   return errorLabels[key] || "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง";
 }
 
+function errorKey(error: unknown) {
+  return error instanceof Error ? error.message : "request_failed";
+}
+
+function isLocationError(error: unknown) {
+  return ["location_required", "location_denied", "location_timeout", "location_https_required"].includes(errorKey(error));
+}
+
+function locationHelpForDevice(): LocationHelp {
+  const userAgent = navigator.userAgent;
+  if (/Android/i.test(userAgent)) {
+    return {
+      href: "intent:#Intent;action=android.settings.LOCATION_SOURCE_SETTINGS;end",
+      instructions: "Android: เปิดตำแหน่ง (GPS) แล้วกลับมาที่ Chrome แตะไอคอนแม่กุญแจข้างที่อยู่เว็บ > สิทธิ์ > ตำแหน่ง > อนุญาต",
+    };
+  }
+  if (/iPhone|iPad|iPod/i.test(userAgent)) {
+    return {
+      href: "App-Prefs:Privacy&path=LOCATION",
+      instructions: "iPhone/iPad: การตั้งค่า > ความเป็นส่วนตัวและความปลอดภัย > บริการหาตำแหน่ง > Safari Websites > ขณะใช้แอป และเปิดตำแหน่งที่ตั้งจริง",
+    };
+  }
+  return {
+    href: null,
+    instructions: "เปิดบริการตำแหน่งของเครื่อง แล้วอนุญาตตำแหน่งให้เว็บไซต์นี้จากไอคอนข้างช่องที่อยู่ของเบราว์เซอร์",
+  };
+}
+
+function attendanceDate(value: string) {
+  const source = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00+07:00` : value;
+  const date = new Date(source);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function formatTime(value: string | null) {
   if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat("th-TH", {
     timeZone: "Asia/Bangkok",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function formatDate(value: string) {
+  const date = attendanceDate(value);
+  if (!date) return value || "—";
   return new Intl.DateTimeFormat("th-TH", {
     timeZone: "Asia/Bangkok",
     weekday: "short",
     day: "numeric",
     month: "short",
     year: "numeric",
-  }).format(new Date(`${value}T00:00:00+07:00`));
+  }).format(date);
+}
+
+function formatDay(value: string) {
+  const date = attendanceDate(value);
+  return date ? new Intl.DateTimeFormat("en-US", { day: "numeric", timeZone: "Asia/Bangkok" }).format(date) : "—";
+}
+
+function formatMonth(value: string) {
+  const date = attendanceDate(value);
+  return date ? new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "Asia/Bangkok" }).format(date) : "—";
 }
 
 function mapUrl(lat: number, lng: number) {
@@ -173,6 +222,8 @@ function isLocationPermissionDenied(error: unknown) {
 
 function toBangkokDateTimeInput(value: string | null) {
   if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Bangkok",
     year: "numeric",
@@ -181,7 +232,7 @@ function toBangkokDateTimeInput(value: string | null) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).formatToParts(new Date(value));
+  }).formatToParts(date);
   const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}`;
 }
@@ -262,6 +313,7 @@ export default function AttendanceApp() {
   const [locating, setLocating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [locationHelp, setLocationHelp] = useState<LocationHelp | null>(null);
   const [clock, setClock] = useState(new Date());
   const [query, setQuery] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -307,6 +359,11 @@ export default function AttendanceApp() {
     return () => { if (photoUrl) URL.revokeObjectURL(photoUrl); };
   }, [photoUrl]);
 
+  function reportLocationError(error: unknown) {
+    setMessage({ type: "error", text: thaiError(error) });
+    setLocationHelp(locationHelpForDevice());
+  }
+
   function requestLocation() {
     if (locationRequest.current) return locationRequest.current;
     if (!window.isSecureContext && window.location.hostname !== "localhost") return Promise.reject(new Error("location_https_required"));
@@ -330,6 +387,7 @@ export default function AttendanceApp() {
       })
       .then((next) => {
         setLocation(next);
+        setLocationHelp(null);
         return next;
       })
       .finally(() => {
@@ -345,7 +403,7 @@ export default function AttendanceApp() {
     setMessage(null);
     try {
       setPhoto(await optimizePhoto(file));
-      if (!location) void requestLocation().catch((caught) => setMessage({ type: "error", text: thaiError(caught) }));
+      if (!location) void requestLocation().catch(reportLocationError);
     } catch {
       setMessage({ type: "error", text: "ไม่สามารถเตรียมรูปนี้ได้ กรุณาถ่ายใหม่อีกครั้ง" });
     }
@@ -374,7 +432,8 @@ export default function AttendanceApp() {
       setMessage({ type: "success", text: action === "check-in" ? "บันทึกเข้างานเรียบร้อย" : "บันทึกเลิกงานเรียบร้อย" });
       if (user) await loadAttendance(user);
     } catch (caught) {
-      setMessage({ type: "error", text: thaiError(caught) });
+      if (isLocationError(caught)) reportLocationError(caught);
+      else setMessage({ type: "error", text: thaiError(caught) });
     } finally {
       setBusy(false);
     }
@@ -476,6 +535,22 @@ export default function AttendanceApp() {
 
       {message && <div className={`toast ${message.type}`} role="status"><span>{message.type === "success" ? "✓" : "!"}</span>{message.text}<button onClick={() => setMessage(null)} aria-label="ปิดข้อความ">×</button></div>}
 
+      {locationHelp && (
+        <div className="location-help-backdrop" role="presentation">
+          <section className="location-help" role="alertdialog" aria-modal="true" aria-labelledby="location-help-title">
+            <button className="location-help-close" type="button" onClick={() => setLocationHelp(null)} aria-label="ปิดคำแนะนำ">×</button>
+            <span className="location-help-icon" aria-hidden="true">●</span>
+            <h2 id="location-help-title">กรุณาเปิดตำแหน่ง</h2>
+            <p>ยังไม่สามารถตรวจสอบตำแหน่งของเครื่องได้</p>
+            <small>{locationHelp.instructions}</small>
+            <div className="location-help-actions">
+              {locationHelp.href && <a className="settings-button" href={locationHelp.href} target="_blank" rel="noreferrer">เปิดการตั้งค่า</a>}
+              <button type="button" onClick={() => { setLocationHelp(null); void requestLocation().catch(reportLocationError); }}>ลองตรวจสอบอีกครั้ง</button>
+            </div>
+          </section>
+        </div>
+      )}
+
       {view === "today" && (
         <section className="dashboard" id="top">
           <section className={`check-card state-${todayState}`} aria-labelledby="today-heading">
@@ -509,7 +584,7 @@ export default function AttendanceApp() {
               {photoUrl && <span className="retake-label">ถ่ายใหม่</span>}
             </button>
 
-            <button className={`location-row ${location ? "located" : ""}`} type="button" onClick={() => void requestLocation().catch((caught) => setMessage({ type: "error", text: thaiError(caught) }))} disabled={locating || todayState === "complete"}>
+            <button className={`location-row ${location ? "located" : ""}`} type="button" onClick={() => void requestLocation().catch(reportLocationError)} disabled={locating || todayState === "complete"}>
               <span className="location-pin">{location ? "✓" : "●"}</span>
               <span><strong>{locating ? "กำลังหาตำแหน่ง…" : location ? "ยืนยันตำแหน่งแล้ว" : "แตะเพื่อตรวจสอบตำแหน่ง"}</strong><small>{location ? `ความแม่นยำประมาณ ${Math.round(location.accuracy)} เมตร` : "ระบบต้องใช้ GPS เพื่อบันทึกเวลา"}</small></span>
             </button>
@@ -611,7 +686,7 @@ function HistoryList({ rows, compact = false, showNames = false }: { rows: Atten
     <div className={`history-list ${compact ? "compact" : "detailed"}`}>
       {rows.map((record) => (
         <article className="history-row" key={record.id}>
-          <div className="date-tile"><strong>{new Date(`${record.work_date}T00:00:00+07:00`).getDate()}</strong><small>{new Intl.DateTimeFormat("th-TH", { month: "short" }).format(new Date(`${record.work_date}T00:00:00+07:00`))}</small></div>
+          <div className="date-tile"><strong>{formatDay(record.work_date)}</strong><small>{formatMonth(record.work_date)}</small></div>
           <div className="record-main">
             {showNames && <div className="record-owner"><strong>{record.name}</strong><span>{roleLabels[record.role]}</span></div>}
             {!showNames && !compact && <p className="record-date">{formatDate(record.work_date)}</p>}

@@ -73,6 +73,18 @@ button:disabled { cursor: not-allowed; }
 .toast > span { width: 23px; height: 23px; display: grid; place-items: center; border-radius: 50%; background: var(--green); }
 .toast.error > span { background: var(--brand); }
 .toast button { width: 27px; height: 27px; margin-left: 5px; border: 0; border-radius: 8px; background: rgba(255, 255, 255, .12); color: white; }
+.location-help-backdrop { position: fixed; z-index: 50; inset: 0; padding: 20px; display: grid; place-items: center; background: rgba(9, 22, 18, .58); backdrop-filter: blur(5px); }
+.location-help { position: relative; width: min(100%, 430px); padding: 30px; border-radius: 24px; background: white; box-shadow: 0 28px 90px rgba(0, 0, 0, .28); text-align: center; }
+.location-help-close { position: absolute; top: 12px; right: 12px; width: 34px; height: 34px; border: 0; border-radius: 10px; background: #f0f2ed; color: var(--muted); font-size: 20px; }
+.location-help-icon { width: 52px; height: 52px; margin: 0 auto 14px; display: grid; place-items: center; border-radius: 50%; background: #fff0ea; color: var(--brand); box-shadow: inset 0 0 0 10px #fff8f4; }
+.location-help h2 { margin: 0; font-size: 25px; letter-spacing: -.03em; }
+.location-help p { margin: 8px 0; color: var(--muted); }
+.location-help > small { display: block; padding: 12px; border-radius: 12px; background: #f5f6f2; color: #4f5d57; line-height: 1.65; text-align: left; }
+.location-help-actions { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.location-help-actions a, .location-help-actions button { min-height: 48px; padding: 0 13px; display: grid; place-items: center; border: 0; border-radius: 13px; font-size: 13px; font-weight: 800; text-decoration: none; }
+.settings-button { background: var(--brand); color: white; }
+.location-help-actions button { background: var(--ink); color: white; }
+.location-help-actions button:only-child { grid-column: 1 / -1; }
 
 .dashboard { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: clamp(36px, 6vw, 72px) 0 72px; display: grid; grid-template-columns: 1fr; gap: 28px; }
 .hero-copy { align-self: center; }
@@ -242,6 +254,8 @@ button:disabled { cursor: not-allowed; }
 }
 
 @media (max-width: 480px) {
+  .location-help { padding: 26px 20px 20px; }
+  .location-help-actions { grid-template-columns: 1fr; }
   .card-heading { gap: 12px; }
   .card-heading time strong { font-size: 26px; }
   .card-heading time small { max-width: 150px; }
