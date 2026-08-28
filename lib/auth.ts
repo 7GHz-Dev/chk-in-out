@@ -1,4 +1,5 @@
-import { ensureDatabase, getBindings, normalizeRole, type Role } from "./database";
+import { callGoogleBackend } from "./google-backend";
+import { normalizeRole, type Role } from "./database";
 
 const COOKIE_NAME = "ttn_session";
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
@@ -12,12 +13,16 @@ export type AppUser = {
   active: boolean;
 };
 
-type UserRow = {
+export type StoredUser = AppUser & {
+  passwordHash: string;
+  passwordSalt: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+type SessionPayload = {
   id: string;
-  username: string;
-  name: string;
-  role: string;
-  active: number;
+  exp: number;
 };
 
 function bytesToHex(bytes: Uint8Array) {
@@ -29,12 +34,33 @@ function hexToBytes(value: string) {
   return new Uint8Array(matches.map((byte) => Number.parseInt(byte, 16)));
 }
 
-export function randomHex(size = 32) {
-  return bytesToHex(crypto.getRandomValues(new Uint8Array(size)));
+function base64UrlEncode(value: Uint8Array) {
+  return Buffer.from(value).toString("base64url");
 }
 
-export async function sha256(value: string) {
-  return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value))));
+function base64UrlDecode(value: string) {
+  return new Uint8Array(Buffer.from(value, "base64url"));
+}
+
+function sessionSecret() {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || secret.length < 32) throw new Error("session_not_configured");
+  return secret;
+}
+
+async function sessionSignature(payload: string) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(sessionSecret()),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(payload)));
+}
+
+export function randomHex(size = 32) {
+  return bytesToHex(crypto.getRandomValues(new Uint8Array(size)));
 }
 
 export async function hashPassword(password: string, saltHex: string) {
@@ -62,54 +88,60 @@ function parseCookies(request: Request) {
   }).filter(([name]) => name));
 }
 
-export async function getSessionToken(request: Request) {
-  return parseCookies(request)[COOKIE_NAME] || "";
+async function verifySession(token: string): Promise<SessionPayload | null> {
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return null;
+  const expected = await sessionSignature(payload);
+  const actual = base64UrlDecode(signature);
+  if (actual.length !== expected.length) return null;
+  let difference = 0;
+  for (let index = 0; index < expected.length; index += 1) difference |= expected[index] ^ actual[index];
+  if (difference !== 0) return null;
+  const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as SessionPayload;
+  if (!parsed.id || !parsed.exp || parsed.exp <= Math.floor(Date.now() / 1000)) return null;
+  return parsed;
 }
 
-function toUser(row: UserRow): AppUser {
-  return { id: row.id, username: row.username, name: row.name, role: normalizeRole(row.role), active: Boolean(row.active) };
+function publicUser(user: StoredUser): AppUser {
+  return {
+    id: user.id,
+    username: user.username,
+    name: user.name,
+    role: normalizeRole(user.role),
+    active: Boolean(user.active),
+  };
 }
 
 export async function currentUser(request: Request): Promise<AppUser | null> {
-  await ensureDatabase();
-  const rawToken = await getSessionToken(request);
-  if (!rawToken) return null;
-  const tokenHash = await sha256(rawToken);
-  const { db } = getBindings();
-  const row = await db.prepare(`SELECT u.id, u.username, u.name, u.role, u.active, s.expires_at
-    FROM sessions s JOIN users u ON u.id = s.user_id
-    WHERE s.token_hash = ? LIMIT 1`).bind(tokenHash).first<UserRow & { expires_at: string }>();
-  if (!row || !row.active || row.expires_at <= new Date().toISOString()) {
-    if (row) await db.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(tokenHash).run();
+  const token = parseCookies(request)[COOKIE_NAME] || "";
+  if (!token) return null;
+  try {
+    const session = await verifySession(token);
+    if (!session) return null;
+    const result = await callGoogleBackend<{ user: StoredUser | null }>("findUser", { userId: session.id });
+    if (!result.user?.active) return null;
+    return publicUser(result.user);
+  } catch {
     return null;
   }
-  return toUser(row);
 }
 
 export async function createSession(userId: string) {
-  const rawToken = randomHex(32);
-  const tokenHash = await sha256(rawToken);
-  const now = new Date();
-  const expires = new Date(now.getTime() + SESSION_SECONDS * 1000);
-  const { db } = getBindings();
-  await db.prepare("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
-    .bind(tokenHash, userId, now.toISOString(), expires.toISOString()).run();
-  return rawToken;
+  const payload = base64UrlEncode(encoder.encode(JSON.stringify({
+    id: userId,
+    exp: Math.floor(Date.now() / 1000) + SESSION_SECONDS,
+  } satisfies SessionPayload)));
+  return `${payload}.${base64UrlEncode(await sessionSignature(payload))}`;
 }
 
-export function setSessionCookie(response: Response, request: Request, rawToken: string) {
+export function setSessionCookie(response: Response, request: Request, token: string) {
   const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
-  response.headers.append("Set-Cookie", `${COOKIE_NAME}=${encodeURIComponent(rawToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_SECONDS}${secure}`);
+  response.headers.append("Set-Cookie", `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_SECONDS}${secure}`);
   return response;
 }
 
-export async function clearSession(request: Request, response: Response) {
-  const rawToken = await getSessionToken(request);
-  if (rawToken) {
-    const { db } = getBindings();
-    await db.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(rawToken)).run();
-  }
-  response.headers.append("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+export function clearSession(response: Response) {
+  response.headers.append("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure`);
   return response;
 }
 
@@ -123,4 +155,12 @@ export function jsonError(error: string, status = 400) {
 
 export function jsonOk(data: Record<string, unknown> = {}, status = 200) {
   return Response.json({ ok: true, ...data }, { status, headers: { "Cache-Control": "no-store" } });
+}
+
+export function backendErrorStatus(message: string) {
+  if (["username_exists", "setup_already_complete", "already_checked_in", "already_checked_out"].includes(message)) return 409;
+  if (message === "account_disabled") return 403;
+  if (message === "photo_not_found") return 404;
+  if (["backend_not_configured", "backend_not_initialized", "backend_unavailable", "backend_invalid_response"].includes(message)) return 503;
+  return 400;
 }

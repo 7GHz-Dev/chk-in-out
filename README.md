@@ -1,28 +1,42 @@
 # TTN Time
 
-ระบบบันทึกเข้างานและเลิกงานแบบ mobile-first พร้อมหลักฐานรูปภาพและตำแหน่ง GPS
+ระบบลงเวลาเข้างานและเลิกงานแบบ mobile-first พร้อมหลักฐานรูปภาพและตำแหน่ง GPS
 
 ## ความสามารถ
 
-- บันทึกเข้างานและเลิกงานด้วยรูปภาพ + GPS
-- ดูประวัติของตนเอง พร้อมรูปและลิงก์ตำแหน่ง
+- ถ่ายรูปและบันทึกตำแหน่งตอนเข้างาน/เลิกงาน
+- ดูประวัติพร้อมรูปและลิงก์ตำแหน่ง
 - Admin และ HR ดูประวัติของทุกคน
-- Admin สร้างผู้ใช้งานและกำหนดบทบาท
-- รองรับ `user`, `admin`, `hr`, `employee-driver` (แทน `employee-shipping`) และ `employee-office`
-- ตั้งค่าผู้ดูแลคนแรกผ่านหน้าจอเมื่อฐานข้อมูลยังว่าง
+- Admin สร้างผู้ใช้และกำหนดบทบาท
+- รองรับ `user`, `admin`, `hr`, `employee-driver` และ `employee-office`
+- สร้าง Admin คนแรกผ่านหน้าเว็บเมื่อฐานข้อมูลยังว่าง
 
-## เริ่มใช้งาน
+## การจัดเก็บข้อมูล
+
+- ข้อมูลผู้ใช้และเวลา: [Google Sheet — Time In-Out](https://docs.google.com/spreadsheets/d/1SWSzPTDAmjcE8RPOLHT6oHeUVL1Lmpj7uvTFZDUU0kE/edit)
+- รูปภาพ: [Google Drive — Time In-Out](https://drive.google.com/drive/folders/1N-gpcfG7mNp3KKWlWijiD81Ve_fVPK8a)
+- API กลาง: Google Apps Script ในโฟลเดอร์ `apps-script/`
+
+รหัสผ่านถูกเก็บเป็น PBKDF2-SHA256 hash พร้อม salt ไม่ได้เก็บรหัสผ่านแบบข้อความธรรมดา
+
+## รันในเครื่อง
+
+คัดลอก `.env.example` เป็น `.env.local` แล้วใส่ URL ของ Apps Script, token สำหรับ API และ session secret จากนั้นรัน:
 
 ```bash
 npm ci
 npm run dev
 ```
 
-เปิด `http://localhost:3000` แล้วสร้างบัญชีผู้ดูแลคนแรก ระบบใช้ Cloudflare D1 เก็บข้อมูลและ R2 เก็บรูปภาพผ่าน bindings `DB` และ `PHOTOS`
+เปิด `http://localhost:3000`
 
-## ตรวจสอบก่อนนำขึ้นระบบ
+## ตรวจสอบก่อน deploy
 
 ```bash
 npm run lint
-npm run test
+npm test
+npm run build
 ```
+
+โปรเจกต์เป็น Next.js มาตรฐานและ deploy บน Vercel ได้โดยตรงจาก GitHub repository
+[7GHz-Dev/chk-in-out](https://github.com/7GHz-Dev/chk-in-out.git)

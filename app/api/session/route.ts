@@ -1,12 +1,16 @@
-import { currentUser, jsonOk } from "@/lib/auth";
-import { ensureDatabase, getBindings } from "@/lib/database";
+import { currentUser, jsonError, jsonOk } from "@/lib/auth";
+import { callGoogleBackend } from "@/lib/google-backend";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  await ensureDatabase();
-  const { db } = getBindings();
-  const count = await db.prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>();
-  const user = await currentUser(request);
-  return jsonOk({ needsSetup: Number(count?.count || 0) === 0, user });
+  try {
+    const [{ userCount }, user] = await Promise.all([
+      callGoogleBackend<{ userCount: number }>("status"),
+      currentUser(request),
+    ]);
+    return jsonOk({ needsSetup: Number(userCount || 0) === 0, user });
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "backend_error", 503);
+  }
 }
