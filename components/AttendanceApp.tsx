@@ -26,7 +26,7 @@ type Attendance = {
 };
 
 type ApiResponse = Record<string, unknown> & { ok?: boolean; error?: string };
-type View = "today" | "history" | "users";
+type View = "today" | "history" | "users" | "attendance-management";
 
 const roleLabels: Record<Role, string> = {
   user: "ผู้ใช้งาน",
@@ -48,11 +48,18 @@ const errorLabels: Record<string, string> = {
   invalid_photo_type: "รองรับเฉพาะรูป JPG, PNG หรือ WebP",
   photo_too_large: "รูปมีขนาดใหญ่เกิน 8 MB",
   location_required: "ไม่สามารถอ่านตำแหน่งได้ กรุณาอนุญาต GPS แล้วลองใหม่",
+  location_denied: "กรุณาเปิดบริการตำแหน่งและอนุญาตให้เบราว์เซอร์เข้าถึงตำแหน่ง (iPhone: การตั้งค่า > ความเป็นส่วนตัว > บริการหาตำแหน่ง, Android: การตั้งค่าเว็บไซต์ > ตำแหน่ง)",
+  location_timeout: "ยังหาตำแหน่งไม่สำเร็จ กรุณาเปิด GPS ออกไปอยู่ในที่โล่ง แล้วแตะตรวจสอบตำแหน่งอีกครั้ง",
+  location_https_required: "การตรวจสอบตำแหน่งใช้งานได้ผ่านเว็บไซต์ HTTPS เท่านั้น",
   already_checked_in: "วันนี้บันทึกเข้างานแล้ว",
   already_checked_out: "วันนี้บันทึกเลิกงานแล้ว",
   check_in_first: "กรุณาบันทึกเข้างานก่อน",
   unauthorized: "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่",
   forbidden: "คุณไม่มีสิทธิ์ทำรายการนี้",
+  invalid_datetime: "วันที่หรือเวลาไม่ถูกต้อง",
+  check_out_before_check_in: "เวลาเลิกงานต้องอยู่หลังเวลาเข้างาน",
+  attendance_not_found: "ไม่พบรายการลงเวลานี้",
+  duplicate_work_date: "พนักงานคนนี้มีรายการในวันที่เลือกอยู่แล้ว",
 };
 
 async function api(path: string, init?: RequestInit) {
@@ -91,17 +98,46 @@ function mapUrl(lat: number, lng: number) {
   return `https://www.google.com/maps?q=${lat},${lng}`;
 }
 
+async function loadPhotoSource(file: File) {
+  if ("createImageBitmap" in window) {
+    try {
+      const bitmap = await createImageBitmap(file);
+      return { source: bitmap as CanvasImageSource, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() };
+    } catch {
+      // Older iOS devices can expose createImageBitmap but fail to decode camera files.
+    }
+  }
+
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("photo_decode_failed"));
+      image.src = url;
+    });
+    return { source: image as CanvasImageSource, width: image.naturalWidth, height: image.naturalHeight, close: () => URL.revokeObjectURL(url) };
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  }
+}
+
 async function optimizePhoto(file: File) {
   if (file.size <= 700 * 1024 && ["image/jpeg", "image/png", "image/webp"].includes(file.type)) return file;
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, 1280 / Math.max(bitmap.width, bitmap.height));
+  const decoded = await loadPhotoSource(file);
+  const scale = Math.min(1, 1024 / Math.max(decoded.width, decoded.height));
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.width = Math.max(1, Math.round(decoded.width * scale));
+  canvas.height = Math.max(1, Math.round(decoded.height * scale));
   const context = canvas.getContext("2d");
-  if (!context) return file;
-  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
+  if (!context) {
+    decoded.close();
+    return file;
+  }
+  context.drawImage(decoded.source, 0, 0, canvas.width, canvas.height);
+  decoded.close();
 
   for (const quality of [0.82, 0.68, 0.54]) {
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
@@ -114,11 +150,40 @@ async function optimizePhoto(file: File) {
 
 function Logo() {
   return (
-    <span className="brand" aria-label="TTN Time">
+    <span className="brand" aria-label="T TIME">
       <span className="brand-mark">T</span>
-      <span className="brand-type"><strong>TTN</strong><small>TIME</small></span>
+      <span className="brand-type"><strong>TIME</strong></span>
     </span>
   );
+}
+
+function positionFromBrowser(options: PositionOptions) {
+  return new Promise<LocationData>((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition((position) => resolve({
+      lat: position.coords.latitude,
+      lng: position.coords.longitude,
+      accuracy: Math.max(0, position.coords.accuracy || 0),
+    }), reject, options);
+  });
+}
+
+function isLocationPermissionDenied(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && Number((error as { code: unknown }).code) === 1);
+}
+
+function toBangkokDateTimeInput(value: string | null) {
+  if (!value) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(value));
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}`;
 }
 
 function AuthPanel({ setup, onSuccess }: { setup: boolean; onSuccess: (user: AppUser) => void }) {
@@ -200,6 +265,7 @@ export default function AttendanceApp() {
   const [clock, setClock] = useState(new Date());
   const [query, setQuery] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+  const locationRequest = useRef<Promise<LocationData> | null>(null);
   const photoUrl = useMemo(() => photo ? URL.createObjectURL(photo) : "", [photo]);
 
   const canViewAll = user?.role === "admin" || user?.role === "hr";
@@ -242,19 +308,36 @@ export default function AttendanceApp() {
   }, [photoUrl]);
 
   function requestLocation() {
-    return new Promise<LocationData>((resolve, reject) => {
-      if (!navigator.geolocation) return reject(new Error("location_required"));
-      setLocating(true);
-      navigator.geolocation.getCurrentPosition((position) => {
-        const next = { lat: position.coords.latitude, lng: position.coords.longitude, accuracy: position.coords.accuracy };
+    if (locationRequest.current) return locationRequest.current;
+    if (!window.isSecureContext && window.location.hostname !== "localhost") return Promise.reject(new Error("location_https_required"));
+    if (!navigator.geolocation) return Promise.reject(new Error("location_required"));
+
+    setLocating(true);
+    const request = positionFromBrowser({ enableHighAccuracy: false, timeout: 8_000, maximumAge: 5 * 60_000 })
+      .catch((firstError: unknown) => {
+        if (isLocationPermissionDenied(firstError)) throw new Error("location_denied");
+        return positionFromBrowser({ enableHighAccuracy: false, timeout: 20_000, maximumAge: 0 });
+      })
+      .catch((secondError: unknown) => {
+        if (secondError instanceof Error && secondError.message === "location_denied") throw secondError;
+        if (isLocationPermissionDenied(secondError)) throw new Error("location_denied");
+        return positionFromBrowser({ enableHighAccuracy: true, timeout: 30_000, maximumAge: 0 });
+      })
+      .catch((finalError: unknown) => {
+        if (finalError instanceof Error && finalError.message === "location_denied") throw finalError;
+        if (isLocationPermissionDenied(finalError)) throw new Error("location_denied");
+        throw new Error("location_timeout");
+      })
+      .then((next) => {
         setLocation(next);
+        return next;
+      })
+      .finally(() => {
         setLocating(false);
-        resolve(next);
-      }, () => {
-        setLocating(false);
-        reject(new Error("location_required"));
-      }, { enableHighAccuracy: true, timeout: 15_000, maximumAge: 30_000 });
-    });
+        locationRequest.current = null;
+      });
+    locationRequest.current = request;
+    return request;
   }
 
   async function selectPhoto(file: File | null) {
@@ -336,6 +419,31 @@ export default function AttendanceApp() {
     }
   }
 
+  async function updateAttendance(event: FormEvent<HTMLFormElement>, record: Attendance) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    const fields = new FormData(event.currentTarget);
+    const checkOutAt = String(fields.get("checkOutAt") || "");
+    try {
+      await api("/api/attendance", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: record.id,
+          checkInAt: fields.get("checkInAt"),
+          ...(checkOutAt ? { checkOutAt } : {}),
+        }),
+      });
+      setMessage({ type: "success", text: `แก้ไขเวลาของ ${record.name} เรียบร้อย` });
+      if (user) await loadAttendance(user);
+    } catch (caught) {
+      setMessage({ type: "error", text: thaiError(caught) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const filteredRows = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("th");
     if (!needle) return rows;
@@ -349,8 +457,6 @@ export default function AttendanceApp() {
 
   const todayState = !today ? "not-started" : today.check_out_at ? "complete" : "working";
   const statusText = todayState === "not-started" ? "ยังไม่ได้เข้างาน" : todayState === "working" ? "กำลังทำงาน" : "บันทึกครบแล้ว";
-  const nextAction = todayState === "not-started" ? "เข้างาน" : todayState === "working" ? "เลิกงาน" : "เสร็จสิ้นวันนี้";
-
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -359,6 +465,7 @@ export default function AttendanceApp() {
           <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}>วันนี้</button>
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>ประวัติ</button>
           {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}>ผู้ใช้งาน</button>}
+          {user.role === "hr" && <button className={view === "attendance-management" ? "active" : ""} onClick={() => setView("attendance-management")}>จัดการเวลา</button>}
         </nav>
         <div className="profile-menu">
           <span className="avatar">{user.name.trim().charAt(0)}</span>
@@ -371,10 +478,18 @@ export default function AttendanceApp() {
 
       {view === "today" && (
         <section className="dashboard" id="top">
-          <div className="hero-copy">
-            <p className="eyebrow">{new Intl.DateTimeFormat("th-TH", { dateStyle: "full", timeZone: "Asia/Bangkok" }).format(clock)}</p>
-            <h1>{todayState === "complete" ? <>วันนี้<br />เยี่ยมมาก!</> : <>พร้อม{nextAction}<br />หรือยัง?</>}</h1>
-            <p className="subtitle">ถ่ายรูป ยืนยันตำแหน่ง แล้วบันทึกเวลาได้ในไม่กี่วินาที</p>
+          <section className={`check-card state-${todayState}`} aria-labelledby="today-heading">
+            <div className="card-heading">
+              <div>
+                <span className="status-dot" /><p>สถานะวันนี้</p>
+                <h2 id="today-heading">{statusText}</h2>
+              </div>
+              <time>
+                <strong>{new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false }).format(clock)}</strong>
+                <small>{new Intl.DateTimeFormat("th-TH", { dateStyle: "full", timeZone: "Asia/Bangkok" }).format(clock)}</small>
+              </time>
+            </div>
+
             {today && (
               <div className="today-summary">
                 <span><small>เข้างาน</small><strong>{formatTime(today.check_in_at)}</strong></span>
@@ -382,16 +497,6 @@ export default function AttendanceApp() {
                 <span><small>เลิกงาน</small><strong>{formatTime(today.check_out_at)}</strong></span>
               </div>
             )}
-          </div>
-
-          <section className={`check-card state-${todayState}`} aria-labelledby="today-heading">
-            <div className="card-heading">
-              <div>
-                <span className="status-dot" /><p>สถานะวันนี้</p>
-                <h2 id="today-heading">{statusText}</h2>
-              </div>
-              <time>{new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false }).format(clock)}</time>
-            </div>
 
             <input ref={fileInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => void selectPhoto(event.target.files?.[0] || null)} />
             <button className={`camera-zone ${photoUrl ? "has-photo" : ""}`} type="button" onClick={() => fileInput.current?.click()} disabled={todayState === "complete"}>
@@ -468,10 +573,33 @@ export default function AttendanceApp() {
         </section>
       )}
 
+      {view === "attendance-management" && user.role === "hr" && (
+        <section className="content-page attendance-management-page">
+          <div className="content-heading">
+            <div><p className="eyebrow">ฝ่ายบุคคล</p><h1>จัดการเวลาเข้า–ออก</h1><p>แก้ไขวันที่และเวลาที่บันทึกผิด โดยยังคงหลักฐานรูปและตำแหน่งเดิมไว้</p></div>
+            <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ค้นหาชื่อ วันที่ หรือ role" /></label>
+          </div>
+          <div className="attendance-edit-list">
+            {filteredRows.length ? filteredRows.map((record) => (
+              <form className="attendance-edit-row" key={`${record.id}-${record.check_in_at}-${record.check_out_at || "open"}`} onSubmit={(event) => void updateAttendance(event, record)}>
+                <div className="attendance-edit-owner">
+                  <span className="avatar">{record.name.trim().charAt(0)}</span>
+                  <span><strong>{record.name}</strong><small>@{record.username} · {roleLabels[record.role]}</small></span>
+                </div>
+                <label>เวลาเข้างาน<input name="checkInAt" type="datetime-local" defaultValue={toBangkokDateTimeInput(record.check_in_at)} required /></label>
+                <label>เวลาเลิกงาน<input name="checkOutAt" type="datetime-local" defaultValue={toBangkokDateTimeInput(record.check_out_at)} /></label>
+                <button type="submit" disabled={busy}>บันทึก</button>
+              </form>
+            )) : <div className="empty-state"><span>○</span><h3>ไม่พบข้อมูล</h3><p>ลองเปลี่ยนคำค้นหาอีกครั้ง</p></div>}
+          </div>
+        </section>
+      )}
+
       <nav className="mobile-nav" aria-label="เมนูหลักบนมือถือ">
         <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}><b>●</b><span>วันนี้</span></button>
         <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}><b>≡</b><span>ประวัติ</span></button>
         {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}><b>+</b><span>ผู้ใช้งาน</span></button>}
+        {user.role === "hr" && <button className={view === "attendance-management" ? "active" : ""} onClick={() => setView("attendance-management")}><b>✎</b><span>จัดการเวลา</span></button>}
       </nav>
     </main>
   );

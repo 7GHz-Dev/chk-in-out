@@ -91,3 +91,36 @@ export async function POST(request: Request) {
     return jsonError(message, backendErrorStatus(message));
   }
 }
+
+function bangkokLocalToIso(value: unknown) {
+  const local = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(local)) return null;
+  const date = new Date(`${local}:00+07:00`);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export async function PATCH(request: Request) {
+  const user = await currentUser(request);
+  if (!user) return jsonError("unauthorized", 401);
+  if (user.role !== "hr") return jsonError("forbidden", 403);
+
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const id = String(body.id || "").trim();
+  const checkInAt = bangkokLocalToIso(body.checkInAt);
+  const hasCheckOut = typeof body.checkOutAt === "string" && body.checkOutAt !== "";
+  const checkOutAt = hasCheckOut ? bangkokLocalToIso(body.checkOutAt) : null;
+  if (!id || !checkInAt || (hasCheckOut && !checkOutAt)) return jsonError("invalid_datetime");
+  if (checkOutAt && new Date(checkOutAt) < new Date(checkInAt)) return jsonError("check_out_before_check_in");
+
+  try {
+    await callGoogleBackend("updateAttendance", {
+      id,
+      checkInAt,
+      ...(checkOutAt ? { checkOutAt } : {}),
+    });
+    return jsonOk();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "backend_error";
+    return jsonError(message, backendErrorStatus(message));
+  }
+}

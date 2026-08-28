@@ -6,7 +6,7 @@ const TTN_ATTENDANCE_COLUMNS = 19;
 const TTN_ROLES = ["user", "admin", "hr", "employee-driver", "employee-office"];
 
 function doGet() {
-  return ttnJson_({ ok: true, service: "TTN Time API" });
+  return ttnJson_({ ok: true, service: "T TIME API" });
 }
 
 function authorizeTtn() {
@@ -48,6 +48,7 @@ function ttnDispatch_(action, body) {
     case "createUser": return { user: ttnCreateUser_(body.user || {}) };
     case "listAttendance": return ttnListAttendance_(body);
     case "recordAttendance": return ttnRecordAttendance_(body);
+    case "updateAttendance": return ttnUpdateAttendance_(body);
     case "getPhoto": return ttnGetPhoto_(body);
     default: throw new Error("invalid_action");
   }
@@ -312,6 +313,40 @@ function ttnRecordAttendance_(input) {
   } catch (error) {
     if (file) file.setTrashed(true);
     throw error;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function ttnUpdateAttendance_(input) {
+  const id = String(input.id || "").trim();
+  const checkInAt = new Date(String(input.checkInAt || ""));
+  const hasCheckOut = Boolean(input.checkOutAt);
+  const checkOutAt = hasCheckOut ? new Date(String(input.checkOutAt)) : null;
+  if (!id || Number.isNaN(checkInAt.getTime()) || (checkOutAt && Number.isNaN(checkOutAt.getTime()))) {
+    throw new Error("invalid_datetime");
+  }
+  if (checkOutAt && checkOutAt.getTime() < checkInAt.getTime()) throw new Error("check_out_before_check_in");
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheet = ttnSheet_("Attendance");
+    const rows = ttnRows_(sheet, TTN_ATTENDANCE_COLUMNS);
+    const index = rows.findIndex(function (row) { return String(row[0]) === id; });
+    if (index < 0) throw new Error("attendance_not_found");
+    const userId = String(rows[index][1]);
+    const workDate = Utilities.formatDate(checkInAt, TTN_TIME_ZONE, "yyyy-MM-dd");
+    const duplicate = rows.some(function (row, rowIndex) {
+      return rowIndex !== index && String(row[0] || "").trim() && String(row[1]) === userId && ttnText_(row[5]) === workDate;
+    });
+    if (duplicate) throw new Error("duplicate_work_date");
+
+    const rowNumber = index + 2;
+    sheet.getRange(rowNumber, 6, 1, 2).setValues([[workDate, checkInAt.toISOString()]]);
+    if (hasCheckOut) sheet.getRange(rowNumber, 13).setValue(checkOutAt.toISOString());
+    sheet.getRange(rowNumber, 19).setValue(new Date().toISOString());
+    return { id: id, workDate: workDate };
   } finally {
     lock.releaseLock();
   }

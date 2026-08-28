@@ -6,8 +6,8 @@ export async function generateMetadata(): Promise<Metadata> {
   const incoming = await headers();
   const host = incoming.get("x-forwarded-host") || incoming.get("host") || "localhost:3000";
   const protocol = incoming.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
-  const socialImage = `${protocol}://${host}/og.png`;
-  const title = "TTN Time — ระบบเข้างานและเลิกงาน";
+  const socialImage = `${protocol}://${host}/og-v2.png`;
+  const title = "T TIME — ระบบเข้างานและเลิกงาน";
   const description = "บันทึกเวลาเข้างานและเลิกงานด้วยรูปภาพและตำแหน่ง GPS";
 
   return {
@@ -18,7 +18,7 @@ export async function generateMetadata(): Promise<Metadata> {
       description,
       type: "website",
       locale: "th_TH",
-      images: [{ url: socialImage, width: 1728, height: 907, alt: "TTN Time" }],
+      images: [{ url: socialImage, width: 1731, height: 909, alt: "T TIME" }],
     },
     twitter: {
       card: "summary_large_image",
