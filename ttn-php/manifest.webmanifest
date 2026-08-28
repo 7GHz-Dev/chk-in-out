@@ -1,0 +1,10 @@
+{
+  "name": "T TIME",
+  "short_name": "T TIME",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f5ef",
+  "theme_color": "#153c32",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
+

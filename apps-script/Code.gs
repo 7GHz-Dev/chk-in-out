@@ -4,6 +4,7 @@ const TTN_TIME_ZONE = "Asia/Bangkok";
 const TTN_USER_COLUMNS = 9;
 const TTN_ATTENDANCE_COLUMNS = 19;
 const TTN_ROLES = ["user", "admin", "hr", "employee-driver", "employee-office"];
+const TTN_PHP_TOKEN_SHA256 = "a771863998523090291e4a4d65b4af67d12ec548a91f6299042c6df09f8d0380";
 
 function doGet() {
   return ttnJson_({ ok: true, service: "T TIME API" });
@@ -32,7 +33,10 @@ function doPost(event) {
       return ttnJson_({ ok: true, initialized: true });
     }
 
-    if (!ttnSafeEqual_(String(body.token || ""), savedToken)) throw new Error("unauthorized_backend");
+    const suppliedToken = String(body.token || "");
+    const primaryAuthorized = ttnSafeEqual_(suppliedToken, savedToken);
+    const phpAuthorized = ttnSafeEqual_(ttnSha256Hex_(suppliedToken), TTN_PHP_TOKEN_SHA256);
+    if (!primaryAuthorized && !phpAuthorized) throw new Error("unauthorized_backend");
     return ttnJson_({ ok: true, ...ttnDispatch_(String(body.action || ""), body) });
   } catch (error) {
     return ttnJson_({ ok: false, error: String(error && error.message ? error.message : error) });
@@ -65,6 +69,12 @@ function ttnSafeEqual_(left, right) {
     difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
   }
   return difference === 0;
+}
+
+function ttnSha256Hex_(value) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value, Utilities.Charset.UTF_8)
+    .map(function (byte) { return (byte + 256).toString(16).slice(-2); })
+    .join("");
 }
 
 function ttnSpreadsheet_() {

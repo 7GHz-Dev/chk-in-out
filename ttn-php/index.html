@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#153c32">
+  <meta name="description" content="T TIME ระบบบันทึกเวลาเข้างานและเลิกงาน">
+  <title>T TIME — ระบบเข้างานและเลิกงาน</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="loading" class="loading-screen">
+    <div class="logo"><b>T</b><strong>TIME</strong></div>
+    <span class="loader"></span>
+    <p>กำลังเตรียมระบบ…</p>
+  </div>
+
+  <main id="auth" class="auth-screen hidden">
+    <section class="auth-intro">
+      <div class="logo"><b>T</b><strong>TIME</strong></div>
+      <div>
+        <p class="eyebrow">FAST ATTENDANCE</p>
+        <h1>ลงเวลาง่าย<br>จบในหน้าเดียว</h1>
+        <p>ถ่ายรูป ยืนยันตำแหน่ง และบันทึกเวลาได้จากมือถือทุกเครื่อง</p>
+      </div>
+      <div class="intro-points"><span>01 ถ่ายรูป</span><span>02 ตำแหน่ง</span><span>03 ลงเวลา</span></div>
+    </section>
+    <section class="auth-form-wrap">
+      <form id="login-form" class="auth-card">
+        <div class="mobile-brand logo"><b>T</b><strong>TIME</strong></div>
+        <p class="eyebrow">ยินดีต้อนรับกลับ</p>
+        <h2>เข้าสู่ระบบ</h2>
+        <p>ใช้บัญชีเดียวกับ T TIME เวอร์ชันเดิม</p>
+        <label>ชื่อผู้ใช้<input name="username" autocomplete="username" autocapitalize="none" required></label>
+        <label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" required></label>
+        <p id="login-error" class="form-error hidden" role="alert"></p>
+        <button class="primary full" type="submit">เข้าสู่ระบบ</button>
+      </form>
+    </section>
+  </main>
+
+  <div id="app" class="app-shell hidden">
+    <header class="topbar">
+      <button id="logo-home" class="plain-button logo" type="button"><b>T</b><strong>TIME</strong></button>
+      <nav id="desktop-nav" class="desktop-nav" aria-label="เมนูหลัก">
+        <button data-view="today" class="active">วันนี้</button>
+        <button data-view="history">ประวัติ</button>
+        <button data-view="users" data-role="admin" class="role-only hidden">ผู้ใช้งาน</button>
+        <button data-view="manage" data-role="hr" class="role-only hidden">จัดการเวลา</button>
+      </nav>
+      <div class="profile">
+        <span id="profile-avatar" class="avatar">T</span>
+        <span class="profile-copy"><strong id="profile-name"></strong><small id="profile-role"></small></span>
+        <button id="logout" class="logout" type="button">ออก</button>
+      </div>
+    </header>
+
+    <div id="toast" class="toast hidden" role="status"><b>!</b><span></span><button type="button" aria-label="ปิด">×</button></div>
+
+    <section id="view-today" class="view dashboard">
+      <article id="check-card" class="check-card">
+        <header class="card-head">
+          <div><p><i></i>สถานะวันนี้</p><h1 id="status-text">ยังไม่ได้เข้างาน</h1></div>
+          <time><strong id="clock-time">--:--</strong><small id="clock-date">—</small></time>
+        </header>
+        <div id="today-summary" class="today-summary hidden">
+          <span><small>เข้างาน</small><strong id="today-in">—</strong></span><i></i>
+          <span><small>เลิกงาน</small><strong id="today-out">—</strong></span>
+        </div>
+
+        <input id="photo-input" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" capture="environment">
+        <button id="camera" class="camera" type="button">
+          <img id="photo-preview" class="hidden" alt="รูปที่เตรียมบันทึกเวลา">
+          <span id="camera-empty"><b>◎</b><strong>ถ่ายรูปเพื่อยืนยันตัวตน</strong><small>แตะเพื่อเปิดกล้อง</small></span>
+          <em id="retake" class="hidden">ถ่ายใหม่</em>
+        </button>
+
+        <button id="location-button" class="location-row" type="button">
+          <b id="location-icon">●</b>
+          <span><strong id="location-title">แตะเพื่อตรวจสอบตำแหน่ง</strong><small id="location-detail">ระบบต้องใช้ GPS เพื่อบันทึกเวลา</small></span>
+        </button>
+
+        <div class="action-grid">
+          <button id="check-in" class="primary" type="button">เข้างาน</button>
+          <button id="check-out" class="dark" type="button">เลิกงาน</button>
+        </div>
+      </article>
+
+      <section class="recent-section">
+        <header class="section-head"><div><p class="eyebrow">รายการล่าสุด</p><h2>ประวัติเข้างาน</h2></div><button id="open-history" class="text-button">ดูทั้งหมด →</button></header>
+        <div id="recent-list" class="history-grid"></div>
+      </section>
+    </section>
+
+    <section id="view-history" class="view content-page hidden">
+      <header class="page-head">
+        <div><p class="eyebrow">ข้อมูลการลงเวลา</p><h1>ประวัติเข้างาน</h1><p>รูปภาพ ตำแหน่ง และเวลาเข้า–เลิกงาน</p></div>
+        <input id="history-search" class="search" type="search" placeholder="ค้นหาชื่อ วันที่ หรือ role">
+      </header>
+      <div id="history-stats" class="stats"></div>
+      <div id="history-list" class="history-list"></div>
+    </section>
+
+    <section id="view-users" class="view content-page hidden">
+      <header class="page-head"><div><p class="eyebrow">ผู้ดูแลระบบ</p><h1>ผู้ใช้งาน</h1><p>สร้างบัญชีและกำหนดบทบาท</p></div></header>
+      <div class="users-layout">
+        <form id="user-form" class="panel form-panel">
+          <h2>เพิ่มผู้ใช้งาน</h2>
+          <label>ชื่อ–นามสกุล<input name="name" required></label>
+          <label>ชื่อผู้ใช้<input name="username" autocapitalize="none" required></label>
+          <label>รหัสผ่าน<input name="password" type="password" minlength="8" required></label>
+          <label>บทบาท<select name="role">
+            <option value="user">ผู้ใช้งาน</option>
+            <option value="admin">ผู้ดูแลระบบ</option>
+            <option value="hr">ฝ่ายบุคคล</option>
+            <option value="employee-driver">พนักงานขับรถ</option>
+            <option value="employee-office">พนักงานออฟฟิศ</option>
+          </select></label>
+          <button class="primary full" type="submit">เพิ่มผู้ใช้งาน</button>
+        </form>
+        <div class="panel"><header class="panel-head"><h2>บัญชีทั้งหมด</h2><span id="user-count">0 คน</span></header><div id="user-list"></div></div>
+      </div>
+    </section>
+
+    <section id="view-manage" class="view content-page hidden">
+      <header class="page-head">
+        <div><p class="eyebrow">ฝ่ายบุคคล</p><h1>จัดการเวลาเข้า–ออก</h1><p>แก้ไขวันที่และเวลา โดยเก็บหลักฐานเดิมไว้</p></div>
+        <input id="manage-search" class="search" type="search" placeholder="ค้นหาชื่อ วันที่ หรือ role">
+      </header>
+      <div id="manage-list" class="manage-list"></div>
+    </section>
+
+    <nav id="mobile-nav" class="mobile-nav" aria-label="เมนูมือถือ">
+      <button data-view="today" class="active"><b>●</b><span>วันนี้</span></button>
+      <button data-view="history"><b>≡</b><span>ประวัติ</span></button>
+      <button data-view="users" data-role="admin" class="role-only hidden"><b>+</b><span>ผู้ใช้</span></button>
+      <button data-view="manage" data-role="hr" class="role-only hidden"><b>✎</b><span>จัดการ</span></button>
+    </nav>
+  </div>
+
+  <div id="location-dialog" class="dialog-backdrop hidden">
+    <section class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="location-dialog-title">
+      <button id="location-close" class="dialog-close" aria-label="ปิด">×</button>
+      <span class="dialog-icon">●</span>
+      <h2 id="location-dialog-title">กรุณาเปิดตำแหน่ง</h2>
+      <p>ยังไม่สามารถตรวจสอบตำแหน่งของเครื่องได้</p>
+      <small id="location-instructions"></small>
+      <div class="dialog-actions"><a id="open-settings" class="primary" target="_blank" rel="noreferrer">เปิดการตั้งค่า</a><button id="retry-location" class="dark">ลองอีกครั้ง</button></div>
+    </section>
+  </div>
+</body>
+</html>
+
