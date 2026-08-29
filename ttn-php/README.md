@@ -18,3 +18,7 @@ php -S localhost:8000 router.php
 
 Vercel ใช้ `vercel-php@0.9.0` และ PHP 8.5 การ deploy ควรตั้ง Root Directory เป็น `ttn-php`
 PHP Function ถูกกำหนดให้รันที่ Singapore (`sin1`) เพื่อลด latency สำหรับผู้ใช้ในประเทศไทย
+
+## การแชร์ผ่าน LINE
+
+ใช้ลิงก์ `https://t-time-php.vercel.app/?openExternalBrowser=1` ในห้องแชต เพื่อให้ LINE เปิดแอปผ่าน Chrome หรือ Safari ซึ่งรองรับ GPS ได้เสถียรกว่า LINE in-app browser ตัวแอปตรวจจับ LINE และแสดงปุ่มเปิดภายนอกให้อัตโนมัติด้วย

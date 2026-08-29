@@ -85,6 +85,12 @@ button:disabled { cursor: not-allowed; }
 .settings-button { background: var(--brand); color: white; }
 .location-help-actions button { background: var(--ink); color: white; }
 .location-help-actions button:only-child { grid-column: 1 / -1; }
+.line-browser-help { border-top: 6px solid #06c755; }
+.line-browser-badge { width: 62px; height: 62px; margin: 0 auto 15px; display: grid; place-items: center; border-radius: 18px; background: #06c755; color: white; font-size: 13px; font-weight: 900; letter-spacing: .04em; }
+.line-browser-help > small { text-align: center; }
+.line-browser-actions { grid-template-columns: 1.25fr .75fr; }
+.line-external-button { background: #06c755; box-shadow: 0 9px 22px rgba(6, 199, 85, .18); }
+.line-continue-button { margin: 15px auto 0; padding: 5px; border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; text-decoration: underline; }
 
 .dashboard { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: clamp(36px, 6vw, 72px) 0 72px; display: grid; grid-template-columns: 1fr; gap: 28px; }
 .hero-copy { align-self: center; }

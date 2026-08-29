@@ -23,6 +23,7 @@ const errors = {
   location_required: "ไม่สามารถอ่านตำแหน่งได้ กรุณาเปิด GPS",
   location_denied: "เบราว์เซอร์ไม่ได้รับอนุญาตให้ใช้ตำแหน่ง",
   location_timeout: "ค้นหาตำแหน่งไม่สำเร็จ กรุณาเปิด GPS แล้วลองใหม่",
+  line_browser_location: "กรุณาเปิดผ่าน Chrome หรือ Safari เพื่อให้ระบบอ่าน GPS ได้แน่นอน",
   already_checked_in: "วันนี้บันทึกเข้างานแล้ว",
   already_checked_out: "วันนี้บันทึกเลิกงานแล้ว",
   check_in_first: "กรุณาบันทึกเข้างานก่อน",
@@ -48,6 +49,7 @@ const state = {
   busy: false,
   view: "today",
   users: [],
+  allowLineGps: false,
 };
 
 async function api(path, options = {}) {
@@ -237,8 +239,28 @@ function permissionDenied(error) {
   return Number(error?.code) === 1 || error?.message === "location_denied";
 }
 
+function isLineBrowser() {
+  return /\bLine\/[\d.]+/i.test(navigator.userAgent);
+}
+
+function externalBrowserUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("openInAppBrowser");
+  url.searchParams.set("openExternalBrowser", "1");
+  return url.toString();
+}
+
+function showLineBrowserHelp() {
+  $("#open-external-browser").href = externalBrowserUrl();
+  $("#line-browser-dialog").classList.remove("hidden");
+}
+
 function requestLocation() {
   if (state.locationPromise) return state.locationPromise;
+  if (isLineBrowser() && !state.allowLineGps) {
+    showLineBrowserHelp();
+    return Promise.reject(new Error("line_browser_location"));
+  }
   if (!window.isSecureContext && location.hostname !== "localhost") return Promise.reject(new Error("location_required"));
   if (!navigator.geolocation) return Promise.reject(new Error("location_required"));
   $("#location-title").textContent = "กำลังหาตำแหน่ง…";
@@ -280,7 +302,8 @@ function locationHelp() {
 
 function handleLocationError(error) {
   toast(errorText(error), "error");
-  locationHelp();
+  if (isLineBrowser()) showLineBrowserHelp();
+  else locationHelp();
 }
 
 async function photoSource(file) {
@@ -348,7 +371,7 @@ async function record(action) {
     toast(action === "check-in" ? "บันทึกเข้างานเรียบร้อย" : "บันทึกเลิกงานเรียบร้อย");
     await loadAttendance();
   } catch (error) {
-    if (["location_required", "location_denied", "location_timeout"].includes(error.message)) handleLocationError(error);
+    if (["location_required", "location_denied", "location_timeout", "line_browser_location"].includes(error.message)) handleLocationError(error);
     else toast(errorText(error), "error");
     if (error.status === 401) showLogin();
   } finally {
@@ -407,6 +430,19 @@ $("#check-in").addEventListener("click", () => void record("check-in"));
 $("#check-out").addEventListener("click", () => void record("check-out"));
 $("#location-close").addEventListener("click", () => $("#location-dialog").classList.add("hidden"));
 $("#retry-location").addEventListener("click", () => { $("#location-dialog").classList.add("hidden"); void requestLocation().catch(handleLocationError); });
+$("#continue-line").addEventListener("click", () => {
+  state.allowLineGps = true;
+  $("#line-browser-dialog").classList.add("hidden");
+  void requestLocation().catch(handleLocationError);
+});
+$("#copy-external-link").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(externalBrowserUrl());
+    toast("คัดลอกลิงก์สำหรับเปิดภายนอกแล้ว");
+  } catch {
+    toast("คัดลอกไม่ได้ กรุณาแตะเปิดเบราว์เซอร์ภายนอก", "error");
+  }
+});
 $("#history-search").addEventListener("input", renderHistory);
 $("#manage-search").addEventListener("input", renderManage);
 
@@ -444,5 +480,5 @@ function updateClock() {
 
 updateClock();
 window.setInterval(updateClock, 1000);
+if (isLineBrowser() && !new URL(window.location.href).searchParams.has("openExternalBrowser")) showLineBrowserHelp();
 void initialize();
-

@@ -52,6 +52,7 @@ const errorLabels: Record<string, string> = {
   location_denied: "กรุณาเปิดบริการตำแหน่งและอนุญาตให้เบราว์เซอร์เข้าถึงตำแหน่ง (iPhone: การตั้งค่า > ความเป็นส่วนตัว > บริการหาตำแหน่ง, Android: การตั้งค่าเว็บไซต์ > ตำแหน่ง)",
   location_timeout: "ยังหาตำแหน่งไม่สำเร็จ กรุณาเปิด GPS ออกไปอยู่ในที่โล่ง แล้วแตะตรวจสอบตำแหน่งอีกครั้ง",
   location_https_required: "การตรวจสอบตำแหน่งใช้งานได้ผ่านเว็บไซต์ HTTPS เท่านั้น",
+  line_browser_location: "กรุณาเปิดผ่าน Chrome หรือ Safari เพื่อให้ระบบอ่าน GPS ได้แน่นอน",
   already_checked_in: "วันนี้บันทึกเข้างานแล้ว",
   already_checked_out: "วันนี้บันทึกเลิกงานแล้ว",
   check_in_first: "กรุณาบันทึกเข้างานก่อน",
@@ -80,7 +81,7 @@ function errorKey(error: unknown) {
 }
 
 function isLocationError(error: unknown) {
-  return ["location_required", "location_denied", "location_timeout", "location_https_required"].includes(errorKey(error));
+  return ["location_required", "location_denied", "location_timeout", "location_https_required", "line_browser_location"].includes(errorKey(error));
 }
 
 function locationHelpForDevice(): LocationHelp {
@@ -101,6 +102,17 @@ function locationHelpForDevice(): LocationHelp {
     href: null,
     instructions: "เปิดบริการตำแหน่งของเครื่อง แล้วอนุญาตตำแหน่งให้เว็บไซต์นี้จากไอคอนข้างช่องที่อยู่ของเบราว์เซอร์",
   };
+}
+
+function isLineBrowser() {
+  return /\bLine\/[\d.]+/i.test(navigator.userAgent);
+}
+
+function externalBrowserUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("openInAppBrowser");
+  url.searchParams.set("openExternalBrowser", "1");
+  return url.toString();
 }
 
 function attendanceDate(value: string) {
@@ -314,10 +326,12 @@ export default function AttendanceApp() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [locationHelp, setLocationHelp] = useState<LocationHelp | null>(null);
+  const [lineBrowserHelp, setLineBrowserHelp] = useState(false);
   const [clock, setClock] = useState(new Date());
   const [query, setQuery] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const locationRequest = useRef<Promise<LocationData> | null>(null);
+  const allowLineGps = useRef(false);
   const photoUrl = useMemo(() => photo ? URL.createObjectURL(photo) : "", [photo]);
 
   const canViewAll = user?.role === "admin" || user?.role === "hr";
@@ -356,16 +370,27 @@ export default function AttendanceApp() {
   }, []);
 
   useEffect(() => {
+    if (!isLineBrowser() || new URL(window.location.href).searchParams.has("openExternalBrowser")) return;
+    const frame = window.requestAnimationFrame(() => setLineBrowserHelp(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
     return () => { if (photoUrl) URL.revokeObjectURL(photoUrl); };
   }, [photoUrl]);
 
   function reportLocationError(error: unknown) {
     setMessage({ type: "error", text: thaiError(error) });
-    setLocationHelp(locationHelpForDevice());
+    if (isLineBrowser()) setLineBrowserHelp(true);
+    else setLocationHelp(locationHelpForDevice());
   }
 
   function requestLocation() {
     if (locationRequest.current) return locationRequest.current;
+    if (isLineBrowser() && !allowLineGps.current) {
+      setLineBrowserHelp(true);
+      return Promise.reject(new Error("line_browser_location"));
+    }
     if (!window.isSecureContext && window.location.hostname !== "localhost") return Promise.reject(new Error("location_https_required"));
     if (!navigator.geolocation) return Promise.reject(new Error("location_required"));
 
@@ -534,6 +559,22 @@ export default function AttendanceApp() {
       </header>
 
       {message && <div className={`toast ${message.type}`} role="status"><span>{message.type === "success" ? "✓" : "!"}</span>{message.text}<button onClick={() => setMessage(null)} aria-label="ปิดข้อความ">×</button></div>}
+
+      {lineBrowserHelp && (
+        <div className="location-help-backdrop" role="presentation">
+          <section className="location-help line-browser-help" role="alertdialog" aria-modal="true" aria-labelledby="line-browser-title">
+            <span className="line-browser-badge">LINE</span>
+            <h2 id="line-browser-title">เปิดผ่าน Chrome หรือ Safari</h2>
+            <p>LINE browser อาจไม่ส่งตำแหน่ง GPS ให้เว็บไซต์ กรุณาเปิดแอปผ่านเบราว์เซอร์หลักก่อนลงเวลา</p>
+            <small>Android จะเปิด Chrome และ iPhone/iPad จะเปิด Safari จากนั้นเข้าสู่ระบบและใช้งานได้ตามปกติ</small>
+            <div className="location-help-actions line-browser-actions">
+              <a className="settings-button line-external-button" href={externalBrowserUrl()}>เปิดเบราว์เซอร์ภายนอก</a>
+              <button type="button" onClick={() => { if (!navigator.clipboard) return setMessage({ type: "error", text: "คัดลอกไม่ได้ กรุณาแตะเปิดเบราว์เซอร์ภายนอก" }); void navigator.clipboard.writeText(externalBrowserUrl()).then(() => setMessage({ type: "success", text: "คัดลอกลิงก์สำหรับเปิดภายนอกแล้ว" })).catch(() => setMessage({ type: "error", text: "คัดลอกไม่ได้ กรุณาแตะเปิดเบราว์เซอร์ภายนอก" })); }}>คัดลอกลิงก์</button>
+            </div>
+            <button className="line-continue-button" type="button" onClick={() => { allowLineGps.current = true; setLineBrowserHelp(false); void requestLocation().catch(reportLocationError); }}>เปิดสิทธิ์ตำแหน่งให้ LINE แล้ว — ลองต่อใน LINE</button>
+          </section>
+        </div>
+      )}
 
       {locationHelp && (
         <div className="location-help-backdrop" role="presentation">

@@ -1,5 +1,7 @@
 # T TIME
 
+> เปิดจาก LINE และต้องใช้ GPS: แชร์ลิงก์ `https://chk-in-out.vercel.app/?openExternalBrowser=1` เพื่อเปิดผ่าน Chrome หรือ Safari โดยตรง
+
 ระบบลงเวลาเข้างานและเลิกงานแบบ mobile-first พร้อมหลักฐานรูปภาพและตำแหน่ง GPS
 
 ## ความสามารถ

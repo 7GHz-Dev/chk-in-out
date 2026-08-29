@@ -20,6 +20,9 @@ test("ships T TIME metadata and removes the starter preview", async () => {
   assert.match(client, /location-help/);
   assert.match(client, /LOCATION_SOURCE_SETTINGS/);
   assert.match(client, /App-Prefs:Privacy/);
+  assert.match(client, /openExternalBrowser/);
+  assert.match(client, /isLineBrowser/);
+  assert.match(client, /line-browser-help/);
   assert.match(client, /attendanceDate/);
   assert.match(backend, /function ttnWorkDate_/);
   assert.match(backend, /work_date: ttnWorkDate_/);

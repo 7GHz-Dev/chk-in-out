@@ -141,6 +141,20 @@
     </nav>
   </div>
 
+  <div id="line-browser-dialog" class="dialog-backdrop hidden">
+    <section class="dialog line-dialog" role="alertdialog" aria-modal="true" aria-labelledby="line-dialog-title">
+      <span class="line-badge">LINE</span>
+      <h2 id="line-dialog-title">เปิดผ่าน Chrome หรือ Safari</h2>
+      <p>LINE browser อาจไม่ส่งตำแหน่ง GPS ให้เว็บไซต์ กรุณาเปิดแอปผ่านเบราว์เซอร์หลักก่อนลงเวลา</p>
+      <small>Android จะเปิด Chrome และ iPhone/iPad จะเปิด Safari จากนั้นเข้าสู่ระบบและใช้งานได้ตามปกติ</small>
+      <div class="dialog-actions line-actions">
+        <a id="open-external-browser" class="primary">เปิดเบราว์เซอร์ภายนอก</a>
+        <button id="copy-external-link" class="dark" type="button">คัดลอกลิงก์</button>
+      </div>
+      <button id="continue-line" class="continue-link" type="button">เปิดสิทธิ์ตำแหน่งให้ LINE แล้ว — ลองต่อใน LINE</button>
+    </section>
+  </div>
+
   <div id="location-dialog" class="dialog-backdrop hidden">
     <section class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="location-dialog-title">
       <button id="location-close" class="dialog-close" aria-label="ปิด">×</button>
@@ -153,4 +167,3 @@
   </div>
 </body>
 </html>
-
