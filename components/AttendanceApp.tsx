@@ -1078,7 +1078,7 @@ export default function AttendanceApp() {
             {dashboard.employees.length ? (
               <div className="report-table-scroll">
                 <table className="dashboard-table">
-                  <thead><tr><th>พนักงาน</th><th>บทบาท</th><th>วันทำงาน</th><th>ชั่วโมงรวม</th><th>มาสาย</th><th>ค้างเลิกงาน</th><th>เงินเดือน</th><th>ค่าเที่ยว/วัน</th><th>ยอดหัก</th><th>ประมาณการจ่าย</th></tr></thead>
+                  <thead><tr><th>พนักงาน</th><th>ตำแหน่ง</th><th>วันทำงาน</th><th>ชั่วโมงรวม</th><th>มาสาย</th><th>ค้างเลิกงาน</th><th>เงินเดือน</th><th>ค่าเที่ยว/วัน</th><th>ยอดหัก</th><th>ประมาณการจ่าย</th></tr></thead>
                   <tbody>{dashboard.employees.map((entry) => (
                     <tr key={entry.key}>
                       <td><strong>{entry.name}</strong></td>
@@ -1115,7 +1115,7 @@ export default function AttendanceApp() {
           <div className="report-filters" aria-label="ตัวกรองรายงาน">
             <label>ตั้งแต่วันที่<input type="date" value={reportFrom} max={reportTo || undefined} onChange={(event) => { setReportFrom(event.target.value); setReportPage(1); }} /></label>
             <label>ถึงวันที่<input type="date" value={reportTo} min={reportFrom || undefined} onChange={(event) => { setReportTo(event.target.value); setReportPage(1); }} /></label>
-            <label>บทบาท<select value={reportRole} onChange={(event) => { setReportRole(event.target.value as Role | "all"); setReportPage(1); }}><option value="all">ทุกบทบาท</option>{Object.entries(roleLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+            <label>ตำแหน่ง<select value={reportRole} onChange={(event) => { setReportRole(event.target.value as Role | "all"); setReportPage(1); }}><option value="all">ทุกตำแหน่ง</option>{Object.entries(roleLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
             <label>สถานะ<select value={reportStatus} onChange={(event) => { setReportStatus(event.target.value as ReportStatus); setReportPage(1); }}><option value="all">ทุกสถานะ</option><option value="complete">ลงเวลาครบ</option><option value="open">ยังไม่เลิกงาน</option></select></label>
             <label className="report-search">ค้นหาพนักงาน<input value={reportQuery} onChange={(event) => { setReportQuery(event.target.value); setReportPage(1); }} placeholder="ชื่อหรือ username" /></label>
             <div className="report-filter-actions">
@@ -1135,11 +1135,11 @@ export default function AttendanceApp() {
           </div>
 
           <section className="role-summary-card" aria-labelledby="role-summary-heading">
-            <div className="report-section-heading"><div><p className="eyebrow">SUMMARY BY ROLE</p><h2 id="role-summary-heading">สรุปตามบทบาท</h2></div><span>{reportRoleSummary.length} กลุ่ม</span></div>
+            <div className="report-section-heading"><div><p className="eyebrow">SUMMARY BY ROLE</p><h2 id="role-summary-heading">สรุปตามตำแหน่ง</h2></div><span>{reportRoleSummary.length} กลุ่ม</span></div>
             {reportRoleSummary.length ? (
               <div className="report-table-scroll">
                 <table className="role-summary-table">
-                  <thead><tr><th>บทบาท</th><th>พนักงาน</th><th>รายการ</th><th>ลงเวลาครบ</th><th>ยังไม่เลิกงาน</th><th>ชั่วโมงเฉลี่ย</th></tr></thead>
+                  <thead><tr><th>ตำแหน่ง</th><th>พนักงาน</th><th>รายการ</th><th>ลงเวลาครบ</th><th>ยังไม่เลิกงาน</th><th>ชั่วโมงเฉลี่ย</th></tr></thead>
                   <tbody>{reportRoleSummary.map((summary) => <tr key={summary.role}><td><span className={`role-badge role-${summary.role}`}>{summary.label}</span></td><td>{summary.employees}</td><td>{summary.records}</td><td>{summary.completed}</td><td>{summary.records - summary.completed}</td><td>{formatHours(summary.averageHours)}</td></tr>)}</tbody>
                 </table>
               </div>
@@ -1160,7 +1160,7 @@ export default function AttendanceApp() {
       {view === "users" && user.role === "admin" && (
         <section className="content-page users-page">
           <div className="content-heading">
-            <div><p className="eyebrow">จัดการสิทธิ์</p><h1>ผู้ใช้งาน</h1><p>สร้างบัญชีใหม่และกำหนดบทบาทสำหรับระบบลงเวลา</p></div>
+            <div><p className="eyebrow">จัดการสิทธิ์</p><h1>ผู้ใช้งาน</h1><p>สร้างบัญชีใหม่และกำหนดตำแหน่งสำหรับระบบลงเวลา</p></div>
           </div>
           <div className="users-layout">
             <form className="user-form" onSubmit={createUser}>
@@ -1168,7 +1168,7 @@ export default function AttendanceApp() {
               <label>ชื่อที่ใช้แสดง<input name="name" placeholder="ชื่อ–นามสกุล" required /></label>
               <label>ชื่อผู้ใช้<input name="username" autoCapitalize="none" placeholder="username" required /></label>
               <label>รหัสผ่าน<input name="password" type="password" minLength={8} placeholder="อย่างน้อย 8 ตัว" required /></label>
-              <label>บทบาท<select name="role" defaultValue="user">{Object.entries(roleLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+              <label>ตำแหน่ง<select name="role" defaultValue="user">{Object.entries(roleLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
               <button className="submit-button" disabled={busy}>{busy ? "กำลังเพิ่ม…" : "เพิ่มผู้ใช้งาน"}</button>
             </form>
             <div className="user-list">
@@ -1264,11 +1264,16 @@ function PhotoThumbnail({ url, alt, caption, variant = "card" }: { url: string; 
 /** หลักฐาน 1 ชุด = รูปที่ถ่ายไว้ + แผนที่จุดที่บันทึก วางคู่กันในขนาดเท่ากัน */
 function PlaceCell({ lat, lng, addresses }: { lat: number; lng: number; addresses: Record<string, string> }) {
   const full = plusCode(lat, lng);
-  const locality = localityOf(addresses[pointKey(lat, lng)]);
+  const key = pointKey(lat, lng);
+  const locality = localityOf(addresses[key]);
+  // แยก "ยังไม่ได้ค้น" ออกจาก "ค้นแล้วไม่เจอ" ไม่งั้นข้อความกำลังโหลดจะค้างอยู่ตลอด
+  const resolved = key in addresses;
   return (
     <>
       <a href={mapUrl(lat, lng)} target="_blank" rel="noreferrer" title={full}>{shortPlusCode(full)}</a>
-      <small className="place-locality">{locality || "กำลังค้นหาตำบล/อำเภอ/จังหวัด…"}</small>
+      <small className="place-locality">
+        {locality || (resolved ? `พิกัด ${lat.toFixed(5)}, ${lng.toFixed(5)}` : "กำลังค้นหาตำบล/อำเภอ/จังหวัด…")}
+      </small>
     </>
   );
 }
@@ -1293,14 +1298,14 @@ function AttendanceTable({ rows, addresses, showNames = false }: { rows: Attenda
           <tr>
             <th>วันที่</th>
             {showNames ? <th>พนักงาน</th> : null}
+            <th>ชั่วโมง</th>
+            <th>สถานะ</th>
             <th>เข้างาน</th>
             <th>หลักฐานเข้างาน</th>
             <th>สถานที่เข้างาน</th>
             <th>เลิกงาน</th>
             <th>หลักฐานเลิกงาน</th>
             <th>สถานที่เลิกงาน</th>
-            <th>ชั่วโมง</th>
-            <th>สถานะ</th>
           </tr>
         </thead>
         <tbody>
@@ -1310,6 +1315,8 @@ function AttendanceTable({ rows, addresses, showNames = false }: { rows: Attenda
               <tr key={record.id}>
                 <td className="cell-time"><strong>{formatDate(record.work_date)}</strong></td>
                 {showNames ? <td className="cell-name"><strong>{record.name}</strong><small>@{record.username}</small></td> : null}
+                <td className="cell-time">{formatHours(workHours(record))}</td>
+                <td><span className={`complete-badge ${closed ? "complete" : "pending"}`}>{closed ? "ครบถ้วน" : "กำลังทำงาน"}</span></td>
                 <td className="cell-time"><span className="type-badge in">เข้างาน</span><small>{formatTime(record.check_in_at)}</small></td>
                 <td><EvidenceCell photoUrl={record.check_in_photo_url} owner={record.name} lat={record.check_in_lat} lng={record.check_in_lng} label="จุดเข้างาน" /></td>
                 <td className="cell-address"><PlaceCell lat={record.check_in_lat} lng={record.check_in_lng} addresses={addresses} /></td>
@@ -1322,8 +1329,6 @@ function AttendanceTable({ rows, addresses, showNames = false }: { rows: Attenda
                 ) : (
                   <td className="cell-waiting" colSpan={3}>ยังไม่เลิกงาน</td>
                 )}
-                <td className="cell-time">{formatHours(workHours(record))}</td>
-                <td><span className={`complete-badge ${closed ? "complete" : "pending"}`}>{closed ? "ครบถ้วน" : "กำลังทำงาน"}</span></td>
               </tr>
             );
           })}

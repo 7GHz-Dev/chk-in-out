@@ -276,7 +276,7 @@ function reportRowMarkup(record) {
   return `<tr>
     <td data-label="วันที่"><strong>${escapeHtml(dateText(record.work_date))}</strong></td>
     <td data-label="พนักงาน"><strong>${escapeHtml(record.name)}</strong><small>@${escapeHtml(record.username)}</small></td>
-    <td data-label="บทบาท"><span class="role-badge">${escapeHtml(roles[record.role] || record.role)}</span></td>
+    <td data-label="ตำแหน่ง"><span class="role-badge">${escapeHtml(roles[record.role] || record.role)}</span></td>
     <td data-label="เข้างาน">${timeText(record.check_in_at)}<small>±${Math.round(record.check_in_accuracy || 0)} ม.</small></td>
     <td data-label="เลิกงาน">${timeText(record.check_out_at)}${record.check_out_at ? `<small>±${Math.round(record.check_out_accuracy || 0)} ม.</small>` : ""}</td>
     <td data-label="ชั่วโมง">${escapeHtml(durationText(minutes))}</td>

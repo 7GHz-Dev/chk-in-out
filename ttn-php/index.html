@@ -105,14 +105,14 @@
     </section>
 
     <section id="view-users" class="view content-page hidden">
-      <header class="page-head"><div><p class="eyebrow">ผู้ดูแลระบบ</p><h1>ผู้ใช้งาน</h1><p>สร้างบัญชีและกำหนดบทบาท</p></div></header>
+      <header class="page-head"><div><p class="eyebrow">ผู้ดูแลระบบ</p><h1>ผู้ใช้งาน</h1><p>สร้างบัญชีและกำหนดตำแหน่ง</p></div></header>
       <div class="users-layout">
         <form id="user-form" class="panel form-panel">
           <h2>เพิ่มผู้ใช้งาน</h2>
           <label>ชื่อ–นามสกุล<input name="name" required></label>
           <label>ชื่อผู้ใช้<input name="username" autocapitalize="none" required></label>
           <label>รหัสผ่าน<input name="password" type="password" minlength="8" required></label>
-          <label>บทบาท<select name="role">
+          <label>ตำแหน่ง<select name="role">
             <option value="user">ผู้ใช้งาน</option>
             <option value="admin">ผู้ดูแลระบบ</option>
             <option value="hr">ฝ่ายบุคคล</option>
@@ -133,8 +133,8 @@
       <form id="report-filters" class="panel report-filters">
         <label>ตั้งแต่วันที่<input id="report-from" name="from" type="date"></label>
         <label>ถึงวันที่<input id="report-to" name="to" type="date"></label>
-        <label>บทบาท<select id="report-role" name="role">
-          <option value="">ทุกบทบาท</option>
+        <label>ตำแหน่ง<select id="report-role" name="role">
+          <option value="">ทุกตำแหน่ง</option>
           <option value="user">ผู้ใช้งาน</option>
           <option value="admin">ผู้ดูแลระบบ</option>
           <option value="hr">ฝ่ายบุคคล</option>
@@ -153,7 +153,7 @@
       <div class="panel report-table-panel">
         <header class="panel-head"><div><h2>รายละเอียดการลงเวลา</h2><small id="report-caption"></small></div><span id="report-count">0 รายการ</span></header>
         <div class="table-scroll"><table class="report-table">
-          <thead><tr><th>วันที่</th><th>พนักงาน</th><th>บทบาท</th><th>เข้างาน</th><th>เลิกงาน</th><th>ชั่วโมง</th><th>สถานะ</th><th>ตำแหน่งโดยประมาณ</th><th>หลักฐาน</th></tr></thead>
+          <thead><tr><th>วันที่</th><th>พนักงาน</th><th>ตำแหน่ง</th><th>เข้างาน</th><th>เลิกงาน</th><th>ชั่วโมง</th><th>สถานะ</th><th>ตำแหน่งโดยประมาณ</th><th>หลักฐาน</th></tr></thead>
           <tbody id="report-body"></tbody>
         </table></div>
       </div>

@@ -7,12 +7,15 @@ const MAX_POINTS = 40;
 // ค้นที่อยู่ใหม่ได้ไม่เกินนี้ต่อ 1 คำขอ ที่เหลือรอรอบถัดไป — กันยิงบริการภายนอกรัวเกินไป
 const MAX_LOOKUPS = 8;
 const NOMINATIM_GAP_MS = 1_100;
+const USER_AGENT = "T-TIME-Attendance/1.0 (https://chk-in-out.vercel.app)";
 
 /**
  * พิกัดเดิมถูกเรียกซ้ำทั้งวัน (พนักงานเข้างานที่เดิม) จึงจำคำตอบไว้ในหน่วยความจำของ
  * instance นั้น ๆ ตารางทั้งหน้าจึงมักเหลือที่อยู่ใหม่ให้ค้นแค่ไม่กี่จุด
  */
-const cache = new Map<string, string>();
+const cache = new Map<string, { text: string; at: number }>();
+// จุดที่หาไม่เจอเก็บไว้ชั่วคราวเท่านั้น ผ่านไปสิบนาทีค่อยลองใหม่ เผื่อผู้ให้บริการล่มชั่วคราว
+const MISS_RETRY_MS = 10 * 60 * 1000;
 
 function pointKey(lat: number, lng: number) {
   return `${lat.toFixed(4)},${lng.toFixed(4)}`;
@@ -56,7 +59,7 @@ function withPrefix(value: string, prefixes: string[], preferred: string) {
 }
 
 function composeLocality(parts: Locality) {
-  const bangkok = /กรุงเทพ|Bangkok/i.test(parts.province);
+  const bangkok = /กรุงเทพ|Bangkok/i.test(`${parts.province} ${parts.amphoe} ${parts.tambon}`);
   const pieces = [
     withPrefix(parts.tambon, TAMBON_PREFIXES, bangkok ? "แขวง" : "ตำบล"),
     withPrefix(parts.amphoe, AMPHOE_PREFIXES, bangkok ? "เขต" : "อำเภอ"),
@@ -97,6 +100,41 @@ async function lookupGoogle(lat: number, lng: number, key: string) {
   });
 }
 
+/**
+ * ทั้ง Nominatim และ Photon คืนชื่อไทยที่มีคำนำหน้าติดมา (ตำบล.../อำเภอ.../จังหวัด...)
+ * จึงคัดจากคำนำหน้าก่อน แล้วค่อยถอยไปดูชื่อฟิลด์ เพราะไทยใช้ city_district เป็นตำบล
+ * และ county เป็นอำเภอ ซึ่งสวนทางกับความหมายของชื่อฟิลด์
+ */
+function localityFromParts(
+  source: Record<string, string | undefined>,
+  fallback: { tambon: string[]; amphoe: string[]; province: string[] },
+) {
+  const parts = { tambon: "", amphoe: "", province: "" };
+  for (const [key, raw] of Object.entries(source)) {
+    if (key === "country_code" || key === "countrycode" || key.startsWith("ISO")) continue;
+    const value = String(raw || "").trim();
+    if (!value) continue;
+    if (!parts.tambon && TAMBON_PREFIXES.some((prefix) => value.startsWith(prefix))) parts.tambon = value;
+    else if (!parts.amphoe && AMPHOE_PREFIXES.some((prefix) => value.startsWith(prefix))) parts.amphoe = value;
+    else if (!parts.province && value.startsWith("จังหวัด")) parts.province = value;
+  }
+
+  const tambon = parts.tambon || firstOf(source, fallback.tambon);
+  let amphoe = parts.amphoe || firstOf(source, fallback.amphoe);
+  // กรุงเทพฯ ไม่มีฟิลด์จังหวัด ชื่อ "กรุงเทพมหานคร" มาในฟิลด์ city ซึ่งบางเจ้าถูกหยิบไปเป็นอำเภอ
+  let province = parts.province || firstOf(source, fallback.province);
+  if (/กรุงเทพ|Bangkok/i.test(`${province} ${amphoe}`)) {
+    province = "กรุงเทพมหานคร";
+    if (/กรุงเทพ|Bangkok/i.test(amphoe)) amphoe = "";
+  }
+  return composeLocality({
+    tambon,
+    amphoe,
+    province: province === amphoe ? "" : province,
+    postcode: firstOf(source, ["postcode"]),
+  });
+}
+
 async function lookupNominatim(lat: number, lng: number) {
   const url = new URL("https://nominatim.openstreetmap.org/reverse");
   url.searchParams.set("format", "jsonv2");
@@ -109,37 +147,38 @@ async function lookupNominatim(lat: number, lng: number) {
     cache: "no-store",
     signal: AbortSignal.timeout(6_000),
     // Nominatim บังคับให้ระบุตัวตนของแอปที่เรียก ไม่งั้นโดนบล็อก
-    headers: { "User-Agent": "T-TIME-Attendance/1.0 (https://chk-in-out.vercel.app)", accept: "application/json" },
+    headers: { "User-Agent": USER_AGENT, accept: "application/json" },
   });
   if (!response.ok) return "";
-  const payload = await response.json() as { address?: Record<string, string | undefined>; display_name?: string };
-  const address = payload.address;
-  if (!address) return String(payload.display_name || "");
-
-  // ชื่อไทยจาก OSM มีคำนำหน้าติดมาอยู่แล้ว (ตำบล.../อำเภอ.../จังหวัด...) แยกจากคำนำหน้าจึงแม่นกว่า
-  // ดูจากชื่อฟิลด์ เพราะ Thailand ใช้ city_district เป็นตำบล และ county เป็นอำเภอ ซึ่งสวนทางกับชื่อฟิลด์
-  const parts = { tambon: "", amphoe: "", province: "" };
-  for (const [key, raw] of Object.entries(address)) {
-    if (key === "country_code" || key.startsWith("ISO")) continue;
-    const value = String(raw || "").trim();
-    if (!value) continue;
-    if (!parts.tambon && TAMBON_PREFIXES.some((prefix) => value.startsWith(prefix))) parts.tambon = value;
-    else if (!parts.amphoe && AMPHOE_PREFIXES.some((prefix) => value.startsWith(prefix))) parts.amphoe = value;
-    else if (!parts.province && value.startsWith("จังหวัด")) parts.province = value;
-  }
-
-  const tambon = parts.tambon || firstOf(address, ["suburb", "quarter", "village", "neighbourhood", "hamlet"]);
-  const amphoe = parts.amphoe || firstOf(address, ["county", "city_district", "district", "municipality", "town", "city"]);
-  // กรุงเทพฯ ไม่มีฟิลด์จังหวัด ชื่อ "กรุงเทพมหานคร" มาในฟิลด์ city จึงต้องเผื่อไว้ แต่กันไม่ให้ซ้ำกับอำเภอ
-  const province = parts.province || firstOf(address, ["province", "state", "city"]);
-  const locality = composeLocality({
-    tambon,
-    amphoe,
-    province: province === amphoe ? "" : province,
-    postcode: firstOf(address, ["postcode"]),
+  const payload = await response.json() as { address?: Record<string, string | undefined> };
+  if (!payload.address) return "";
+  return localityFromParts(payload.address, {
+    tambon: ["suburb", "quarter", "village", "neighbourhood", "hamlet"],
+    amphoe: ["county", "city_district", "district", "municipality", "town", "city"],
+    province: ["province", "state", "city"],
   });
-  // บางจุด OSM ไม่มีข้อมูลเขตการปกครองครบ ใช้ชื่อยาวของมันไปก่อนดีกว่าไม่แสดงอะไรเลย
-  return locality || String(payload.display_name || "");
+}
+
+/** Photon ของ komoot อ่านข้อมูล OSM ชุดเดียวกันแต่ผ่อนปรนกับการเรียกจากเซิร์ฟเวอร์มากกว่า */
+async function lookupPhoton(lat: number, lng: number) {
+  const url = new URL("https://photon.komoot.io/reverse");
+  url.searchParams.set("lat", String(lat));
+  url.searchParams.set("lon", String(lng));
+  url.searchParams.set("lang", "default");
+  const response = await fetch(url, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(6_000),
+    headers: { "User-Agent": USER_AGENT, accept: "application/json" },
+  });
+  if (!response.ok) return "";
+  const payload = await response.json() as { features?: { properties?: Record<string, string | undefined> }[] };
+  const properties = payload.features?.[0]?.properties;
+  if (!properties) return "";
+  return localityFromParts(properties, {
+    tambon: ["district", "locality", "suburb", "quarter"],
+    amphoe: ["county", "city", "town"],
+    province: ["state", "province", "city"],
+  });
 }
 
 export async function GET(request: Request) {
@@ -150,26 +189,36 @@ export async function GET(request: Request) {
   const addresses: Record<string, string> = {};
   const pending = points.filter((point) => {
     const cached = cache.get(point.key);
-    if (cached === undefined) return true;
-    addresses[point.key] = cached;
+    if (!cached) return true;
+    if (!cached.text && Date.now() - cached.at > MISS_RETRY_MS) return true;
+    addresses[point.key] = cached.text;
     return false;
   });
 
   const googleKey = process.env.GOOGLE_MAPS_API_KEY || "";
+  // ไล่ทีละเจ้าจนกว่าจะได้ชื่อพื้นที่ ผู้ให้บริการฟรีบางเจ้าบล็อก IP ของคลาวด์เป็นครั้งคราว
+  const providers: { name: string; run: (lat: number, lng: number) => Promise<string> }[] = [];
+  if (googleKey) providers.push({ name: "google", run: (lat, lng) => lookupGoogle(lat, lng, googleKey) });
+  providers.push({ name: "photon", run: lookupPhoton });
+  providers.push({ name: "nominatim", run: lookupNominatim });
+
   const lookups = pending.slice(0, MAX_LOOKUPS);
   for (let index = 0; index < lookups.length; index += 1) {
     const point = lookups[index];
-    try {
-      if (!googleKey && index > 0) await new Promise((resolve) => setTimeout(resolve, NOMINATIM_GAP_MS));
-      const address = googleKey
-        ? await lookupGoogle(point.lat, point.lng, googleKey)
-        : await lookupNominatim(point.lat, point.lng);
-      // จำผลว่างไว้ด้วย จะได้ไม่ยิงถามซ้ำจุดที่บริการตอบไม่ได้
-      cache.set(point.key, address);
-      addresses[point.key] = address;
-    } catch {
-      addresses[point.key] = "";
+    let address = "";
+    for (const provider of providers) {
+      try {
+        if (provider.name === "nominatim" && index > 0) {
+          await new Promise((resolve) => setTimeout(resolve, NOMINATIM_GAP_MS));
+        }
+        address = await provider.run(point.lat, point.lng);
+        if (address) break;
+      } catch {
+        // เจ้านี้ล่มหรือโดนปฏิเสธ ลองเจ้าถัดไป
+      }
     }
+    cache.set(point.key, { text: address, at: Date.now() });
+    addresses[point.key] = address;
   }
 
   return jsonOk({ addresses, pending: Math.max(0, pending.length - lookups.length) });
