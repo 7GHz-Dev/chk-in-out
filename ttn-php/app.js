@@ -50,6 +50,9 @@ const state = {
   view: "today",
   users: [],
   allowLineGps: false,
+  reportInitialized: false,
+  reportRows: null,
+  reportBusy: false,
 };
 
 async function api(path, options = {}) {
@@ -115,6 +118,62 @@ function localInput(value) {
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
 
+function bangkokDateKey(value = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(value).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function mapThumbMarkup(latValue, lngValue, label = "ดูแผนที่") {
+  if (latValue == null || lngValue == null || latValue === "" || lngValue === "") return `<span class="map-unavailable">ไม่มีข้อมูลตำแหน่ง</span>`;
+  const lat = Number(latValue);
+  const lng = Number(lngValue);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return `<span class="map-unavailable">ไม่มีข้อมูลตำแหน่ง</span>`;
+  const safeLat = lat.toFixed(6);
+  const safeLng = lng.toFixed(6);
+  return `<div class="map-thumb" data-lat="${safeLat}" data-lng="${safeLng}">
+    <div class="map-frame"><span class="map-placeholder"><b>●</b> กำลังโหลดแผนที่</span></div>
+    <a href="https://www.openstreetmap.org/?mlat=${safeLat}&mlon=${safeLng}#map=16/${safeLat}/${safeLng}" target="_blank" rel="noreferrer">${escapeHtml(label)} · OpenStreetMap ↗</a>
+  </div>`;
+}
+
+function loadMapThumbnail(element) {
+  if (element.dataset.ready === "true") return;
+  const lat = Number(element.dataset.lat);
+  const lng = Number(element.dataset.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+  const margin = 0.004;
+  const bbox = `${lng - margin},${lat - margin},${lng + margin},${lat + margin}`;
+  const iframe = document.createElement("iframe");
+  iframe.loading = "lazy";
+  iframe.title = "แผนที่ตำแหน่งโดยประมาณ";
+  iframe.referrerPolicy = "no-referrer";
+  iframe.src = `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik&marker=${encodeURIComponent(`${lat},${lng}`)}`;
+  element.querySelector(".map-frame")?.replaceChildren(iframe);
+  element.dataset.ready = "true";
+}
+
+const mapObserver = "IntersectionObserver" in window ? new IntersectionObserver((entries) => {
+  entries.forEach((entry) => {
+    if (!entry.isIntersecting) return;
+    loadMapThumbnail(entry.target);
+    mapObserver.unobserve(entry.target);
+  });
+}, { rootMargin: "320px" }) : null;
+
+function hydrateMapThumbnails(root = document) {
+  root.querySelectorAll(".map-thumb:not([data-ready])").forEach((element) => {
+    if (mapObserver) mapObserver.observe(element);
+    else loadMapThumbnail(element);
+  });
+}
+
+function releaseMapThumbnails(root) {
+  if (!mapObserver) return;
+  root.querySelectorAll(".map-thumb").forEach((element) => mapObserver.unobserve(element));
+}
+
 function empty(text = "ยังไม่มีประวัติ") {
   return `<div class="empty">${escapeHtml(text)}</div>`;
 }
@@ -124,6 +183,7 @@ function cardMarkup(record) {
     ${dateTile(record.work_date)}
     <div class="time-pair"><span><small>เข้างาน</small><strong>${timeText(record.check_in_at)}</strong></span><i></i><span><small>เลิกงาน</small><strong>${timeText(record.check_out_at)}</strong></span></div>
     <span class="badge ${record.check_out_at ? "" : "pending"}">${record.check_out_at ? "ครบถ้วน" : "กำลังทำงาน"}</span>
+    ${mapThumbMarkup(record.check_in_lat, record.check_in_lng, "ตำแหน่งเข้างาน")}
   </article>`;
 }
 
@@ -131,13 +191,13 @@ function historyMarkup(record) {
   const showName = ["admin", "hr"].includes(state.user.role);
   const owner = showName ? `<div class="owner"><strong>${escapeHtml(record.name)}</strong><small>${escapeHtml(roles[record.role] || record.role)}</small></div>` : `<div class="owner"><strong>${escapeHtml(dateText(record.work_date))}</strong></div>`;
   const checkout = record.check_out_photo_url && record.check_out_lat != null
-    ? `<a class="evidence" href="${escapeHtml(record.check_out_photo_url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(record.check_out_photo_url)}" loading="lazy" alt="รูปเลิกงาน"><span><strong>รูปเลิกงาน</strong><small>GPS ±${Math.round(record.check_out_accuracy || 0)} ม.</small></span></a><a class="map-link" href="https://www.google.com/maps?q=${Number(record.check_out_lat)},${Number(record.check_out_lng)}" target="_blank" rel="noreferrer">ดูตำแหน่ง ↗</a>`
+    ? `<section class="evidence-place"><a class="evidence" href="${escapeHtml(record.check_out_photo_url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(record.check_out_photo_url)}" loading="lazy" alt="รูปเลิกงาน"><span><strong>รูปเลิกงาน</strong><small>GPS ±${Math.round(record.check_out_accuracy || 0)} ม.</small></span></a>${mapThumbMarkup(record.check_out_lat, record.check_out_lng, "ตำแหน่งเลิกงาน")}</section>`
     : `<div class="waiting">รอบันทึกเลิกงาน</div>`;
   return `<article class="history-row">
     ${dateTile(record.work_date)}
     <div>${owner}<div class="time-pair"><span><small>เข้างาน</small><strong>${timeText(record.check_in_at)}</strong></span><i></i><span><small>เลิกงาน</small><strong>${timeText(record.check_out_at)}</strong></span></div></div>
     <span class="badge ${record.check_out_at ? "" : "pending"}">${record.check_out_at ? "ครบถ้วน" : "กำลังทำงาน"}</span>
-    <div class="evidence-grid"><a class="evidence" href="${escapeHtml(record.check_in_photo_url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(record.check_in_photo_url)}" loading="lazy" alt="รูปเข้างาน"><span><strong>รูปเข้างาน</strong><small>GPS ±${Math.round(record.check_in_accuracy || 0)} ม.</small></span></a><a class="map-link" href="https://www.google.com/maps?q=${Number(record.check_in_lat)},${Number(record.check_in_lng)}" target="_blank" rel="noreferrer">ดูตำแหน่ง ↗</a>${checkout}</div>
+    <div class="evidence-grid"><section class="evidence-place"><a class="evidence" href="${escapeHtml(record.check_in_photo_url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(record.check_in_photo_url)}" loading="lazy" alt="รูปเข้างาน"><span><strong>รูปเข้างาน</strong><small>GPS ±${Math.round(record.check_in_accuracy || 0)} ม.</small></span></a>${mapThumbMarkup(record.check_in_lat, record.check_in_lng, "ตำแหน่งเข้างาน")}</section>${checkout}</div>
   </article>`;
 }
 
@@ -145,6 +205,143 @@ function filteredRows(query) {
   const needle = query.trim().toLocaleLowerCase("th");
   if (!needle) return state.rows;
   return state.rows.filter((row) => `${row.name} ${row.username} ${roles[row.role] || row.role} ${row.work_date}`.toLocaleLowerCase("th").includes(needle));
+}
+
+function workedMinutes(record) {
+  const checkIn = validDate(record.check_in_at);
+  const checkOut = validDate(record.check_out_at);
+  if (!checkIn || !checkOut) return null;
+  const minutes = Math.round((checkOut.getTime() - checkIn.getTime()) / 60000);
+  return minutes >= 0 ? minutes : null;
+}
+
+function durationText(minutes) {
+  if (!Number.isFinite(minutes)) return "—";
+  return `${Math.floor(minutes / 60)} ชม. ${minutes % 60} นาที`;
+}
+
+function initializeReportFilters() {
+  if (state.reportInitialized) return;
+  const today = bangkokDateKey();
+  $("#report-from").value = `${today.slice(0, 8)}01`;
+  $("#report-to").value = today;
+  state.reportInitialized = true;
+}
+
+function reportFilters() {
+  return {
+    from: $("#report-from").value,
+    to: $("#report-to").value,
+    role: $("#report-role").value,
+    status: $("#report-status").value,
+    search: $("#report-search").value.trim(),
+  };
+}
+
+function filteredReportRows() {
+  const filters = reportFilters();
+  const needle = filters.search.toLocaleLowerCase("th");
+  return (state.reportRows || []).filter((row) => {
+    const workDate = String(row.work_date || "");
+    if (filters.from && workDate < filters.from) return false;
+    if (filters.to && workDate > filters.to) return false;
+    if (filters.role && row.role !== filters.role) return false;
+    if (filters.status === "complete" && !row.check_out_at) return false;
+    if (filters.status === "working" && row.check_out_at) return false;
+    return !needle || `${row.name} ${row.username} ${roles[row.role] || row.role} ${workDate}`.toLocaleLowerCase("th").includes(needle);
+  });
+}
+
+function reportEvidenceMarkup(record) {
+  const checkIn = record.check_in_photo_url ? `<a href="${escapeHtml(record.check_in_photo_url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(record.check_in_photo_url)}" loading="lazy" alt="รูปเข้างาน"><span>เข้า</span></a>` : "";
+  const checkOut = record.check_out_photo_url ? `<a href="${escapeHtml(record.check_out_photo_url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(record.check_out_photo_url)}" loading="lazy" alt="รูปเลิกงาน"><span>ออก</span></a>` : "";
+  return `<div class="report-evidence">${checkIn}${checkOut || `<span class="report-no-photo">—</span>`}</div>`;
+}
+
+function reportRowMarkup(record) {
+  const minutes = workedMinutes(record);
+  const checkoutMap = record.check_out_lat != null ? mapThumbMarkup(record.check_out_lat, record.check_out_lng, "เลิกงาน") : "";
+  return `<tr>
+    <td data-label="วันที่"><strong>${escapeHtml(dateText(record.work_date))}</strong></td>
+    <td data-label="พนักงาน"><strong>${escapeHtml(record.name)}</strong><small>@${escapeHtml(record.username)}</small></td>
+    <td data-label="บทบาท"><span class="role-badge">${escapeHtml(roles[record.role] || record.role)}</span></td>
+    <td data-label="เข้างาน">${timeText(record.check_in_at)}<small>±${Math.round(record.check_in_accuracy || 0)} ม.</small></td>
+    <td data-label="เลิกงาน">${timeText(record.check_out_at)}${record.check_out_at ? `<small>±${Math.round(record.check_out_accuracy || 0)} ม.</small>` : ""}</td>
+    <td data-label="ชั่วโมง">${escapeHtml(durationText(minutes))}</td>
+    <td data-label="สถานะ"><span class="badge ${record.check_out_at ? "" : "pending"}">${record.check_out_at ? "บันทึกครบ" : "ยังไม่เลิกงาน"}</span></td>
+    <td data-label="ตำแหน่ง"><div class="report-map-stack">${mapThumbMarkup(record.check_in_lat, record.check_in_lng, "เข้างาน")}${checkoutMap}</div></td>
+    <td data-label="หลักฐาน">${reportEvidenceMarkup(record)}</td>
+  </tr>`;
+}
+
+function renderReport() {
+  if (!state.user || !["admin", "hr"].includes(state.user.role)) return;
+  initializeReportFilters();
+  if (!state.reportRows) {
+    releaseMapThumbnails($("#report-body"));
+    $("#report-kpis").innerHTML = `<article><small>สถานะ</small><strong>…</strong><span>กำลังโหลดข้อมูลรายงาน</span></article>`;
+    $("#report-count").textContent = "กำลังโหลด";
+    $("#report-caption").textContent = "กำลังอ่านข้อมูลจากฐานข้อมูล";
+    $("#report-body").innerHTML = `<tr><td colspan="9">กำลังเตรียมรายงาน…</td></tr>`;
+    return;
+  }
+  const filters = reportFilters();
+  if (filters.from && filters.to && filters.from > filters.to) {
+    releaseMapThumbnails($("#report-body"));
+    $("#report-kpis").innerHTML = `<article><small>ตัวกรอง</small><strong>!</strong><span>กรุณาตรวจสอบช่วงวันที่</span></article>`;
+    $("#report-count").textContent = "0 รายการ";
+    $("#report-caption").textContent = "ช่วงวันที่ไม่ถูกต้อง";
+    $("#report-body").innerHTML = `<tr><td colspan="9">วันที่เริ่มต้นต้องไม่อยู่หลังวันที่สิ้นสุด</td></tr>`;
+    $("#report-export").disabled = true;
+    return;
+  }
+  $("#report-export").disabled = false;
+  const rows = filteredReportRows();
+  const completed = rows.filter((row) => row.check_out_at);
+  const minutes = completed.reduce((total, row) => total + (workedMinutes(row) || 0), 0);
+  const employees = new Set(rows.map((row) => row.user_id || row.username)).size;
+  const average = completed.length ? Math.round(minutes / completed.length) : null;
+  $("#report-kpis").innerHTML = `
+    <article><small>รายการลงเวลา</small><strong>${rows.length.toLocaleString("th-TH")}</strong><span>รายการ</span></article>
+    <article><small>พนักงาน</small><strong>${employees.toLocaleString("th-TH")}</strong><span>คน</span></article>
+    <article><small>บันทึกครบ</small><strong>${completed.length.toLocaleString("th-TH")}</strong><span>รายการ</span></article>
+    <article><small>ยังไม่เลิกงาน</small><strong>${(rows.length - completed.length).toLocaleString("th-TH")}</strong><span>รายการ</span></article>
+    <article><small>ชั่วโมงรวม</small><strong>${(minutes / 60).toLocaleString("th-TH", { maximumFractionDigits: 2 })}</strong><span>ชั่วโมง</span></article>
+    <article><small>ชั่วโมงเฉลี่ย</small><strong>${average == null ? "—" : (average / 60).toLocaleString("th-TH", { maximumFractionDigits: 2 })}</strong><span>ชม./วัน</span></article>`;
+  const visibleRows = rows.slice(0, 200);
+  $("#report-count").textContent = `${rows.length.toLocaleString("th-TH")} รายการ`;
+  $("#report-caption").textContent = rows.length > visibleRows.length ? `แสดง ${visibleRows.length} รายการแรก — Excel มีข้อมูลที่ตรงตัวกรองทั้งหมด` : "เรียงจากวันที่ล่าสุด";
+  releaseMapThumbnails($("#report-body"));
+  $("#report-body").innerHTML = visibleRows.length ? visibleRows.map(reportRowMarkup).join("") : `<tr><td colspan="9">ไม่พบข้อมูลตามตัวกรอง</td></tr>`;
+  hydrateMapThumbnails($("#report-body"));
+}
+
+function exportReport() {
+  const filters = reportFilters();
+  if (filters.from && filters.to && filters.from > filters.to) return toast("วันที่เริ่มต้นต้องไม่อยู่หลังวันที่สิ้นสุด", "error");
+  const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+  const link = document.createElement("a");
+  link.href = `/api/report?${query}`;
+  link.download = "T-TIME-Attendance.xlsx";
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+async function loadReportData() {
+  if (state.reportRows || state.reportBusy) return;
+  state.reportBusy = true;
+  renderReport();
+  try {
+    const data = await api("/api/report-data");
+    state.reportRows = data.rows || [];
+    if (state.view === "report") renderReport();
+  } catch (error) {
+    toast(errorText(error), "error");
+    if (error.status === 401) showLogin();
+  } finally {
+    state.reportBusy = false;
+  }
 }
 
 function renderAttendance() {
@@ -160,15 +357,20 @@ function renderAttendance() {
   $("#location-button").disabled = todayState === "complete";
   $("#check-in").disabled = state.busy || todayState !== "not-started";
   $("#check-out").disabled = state.busy || todayState !== "working";
+  releaseMapThumbnails($("#recent-list"));
   $("#recent-list").innerHTML = state.rows.length ? state.rows.slice(0, 3).map(cardMarkup).join("") : empty();
+  hydrateMapThumbnails($("#recent-list"));
   renderHistory();
   if (state.user.role === "hr") renderManage();
+  if (["admin", "hr"].includes(state.user.role) && state.view === "report") renderReport();
 }
 
 function renderHistory() {
   const rows = filteredRows($("#history-search").value);
   $("#history-stats").innerHTML = `<span><small>ทั้งหมด</small><strong>${rows.length}</strong></span><span><small>ครบถ้วน</small><strong>${rows.filter((row) => row.check_out_at).length}</strong></span><span><small>ยังไม่เลิกงาน</small><strong>${rows.filter((row) => !row.check_out_at).length}</strong></span>`;
+  releaseMapThumbnails($("#history-list"));
   $("#history-list").innerHTML = rows.length ? rows.map(historyMarkup).join("") : empty("ไม่พบข้อมูล");
+  hydrateMapThumbnails($("#history-list"));
 }
 
 function renderManage() {
@@ -197,12 +399,14 @@ function showApp(user) {
   $("#profile-name").textContent = user.name;
   $("#profile-role").textContent = roles[user.role] || user.role;
   $("#profile-avatar").textContent = (user.name || "T").trim().charAt(0);
-  $$(".role-only").forEach((element) => element.classList.toggle("hidden", element.dataset.role !== user.role));
+  $$(".role-only").forEach((element) => element.classList.toggle("hidden", !String(element.dataset.role || "").split(",").includes(user.role)));
   switchView("today");
 }
 
 function showLogin() {
   state.user = null;
+  state.reportRows = null;
+  state.reportInitialized = false;
   $("#loading").classList.add("hidden");
   $("#app").classList.add("hidden");
   $("#auth").classList.remove("hidden");
@@ -224,11 +428,13 @@ async function initialize() {
 function switchView(view) {
   if (view === "users" && state.user.role !== "admin") view = "today";
   if (view === "manage" && state.user.role !== "hr") view = "today";
+  if (view === "report" && !["admin", "hr"].includes(state.user.role)) view = "today";
   state.view = view;
   $$(".view").forEach((element) => element.classList.toggle("hidden", element.id !== `view-${view}`));
   $$('[data-view]').forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   window.scrollTo({ top: 0, behavior: "smooth" });
   if (view === "users") void loadUsers();
+  if (view === "report") { renderReport(); void loadReportData(); }
 }
 
 function position(options) {
@@ -362,6 +568,7 @@ async function record(action) {
     form.set("accuracy", String(point.accuracy));
     form.set("device_time", new Date().toISOString());
     await api("/api/attendance", { method: "POST", body: form });
+    state.reportRows = null;
     setPhoto(null);
     state.location = null;
     $("#location-button").classList.remove("located");
@@ -445,6 +652,10 @@ $("#copy-external-link").addEventListener("click", async () => {
 });
 $("#history-search").addEventListener("input", renderHistory);
 $("#manage-search").addEventListener("input", renderManage);
+$("#report-filters").addEventListener("input", renderReport);
+$("#report-filters").addEventListener("change", renderReport);
+$("#report-reset").addEventListener("click", () => { $("#report-filters").reset(); renderReport(); });
+$("#report-export").addEventListener("click", exportReport);
 
 $("#user-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -467,6 +678,7 @@ $("#manage-list").addEventListener("submit", async (event) => {
   button.disabled = true;
   try {
     await api("/api/attendance", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: form.dataset.id, checkInAt: fields.get("checkInAt"), checkOutAt: fields.get("checkOutAt") }) });
+    state.reportRows = null;
     toast("แก้ไขเวลาเรียบร้อย"); await loadAttendance();
   } catch (error) { toast(errorText(error), "error"); }
   finally { button.disabled = false; }

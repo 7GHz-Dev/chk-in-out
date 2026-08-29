@@ -50,6 +50,7 @@
         <button data-view="history">ประวัติ</button>
         <button data-view="users" data-role="admin" class="role-only hidden">ผู้ใช้งาน</button>
         <button data-view="manage" data-role="hr" class="role-only hidden">จัดการเวลา</button>
+        <button data-view="report" data-role="admin,hr" class="role-only hidden">รายงาน</button>
       </nav>
       <div class="profile">
         <span id="profile-avatar" class="avatar">T</span>
@@ -133,11 +134,46 @@
       <div id="manage-list" class="manage-list"></div>
     </section>
 
+    <section id="view-report" class="view content-page report-page hidden">
+      <header class="page-head report-head">
+        <div><p class="eyebrow">HR ATTENDANCE REPORT</p><h1>รายงานเวลา</h1><p>สรุปข้อมูลการมาทำงาน พร้อมหลักฐานรูปภาพและตำแหน่ง</p></div>
+        <button id="report-export" class="primary report-export" type="button">ดาวน์โหลด Excel</button>
+      </header>
+      <form id="report-filters" class="panel report-filters">
+        <label>ตั้งแต่วันที่<input id="report-from" name="from" type="date"></label>
+        <label>ถึงวันที่<input id="report-to" name="to" type="date"></label>
+        <label>บทบาท<select id="report-role" name="role">
+          <option value="">ทุกบทบาท</option>
+          <option value="user">ผู้ใช้งาน</option>
+          <option value="admin">ผู้ดูแลระบบ</option>
+          <option value="hr">ฝ่ายบุคคล</option>
+          <option value="employee-driver">พนักงานขับรถ</option>
+          <option value="employee-office">พนักงานออฟฟิศ</option>
+        </select></label>
+        <label>สถานะ<select id="report-status" name="status">
+          <option value="">ทุกสถานะ</option>
+          <option value="complete">บันทึกครบ</option>
+          <option value="working">ยังไม่เลิกงาน</option>
+        </select></label>
+        <label class="report-search-label">ค้นหา<input id="report-search" name="search" type="search" placeholder="ชื่อ ชื่อผู้ใช้ หรือวันที่"></label>
+        <button id="report-reset" class="filter-reset" type="button">ล้างตัวกรอง</button>
+      </form>
+      <div id="report-kpis" class="report-kpis" aria-live="polite"></div>
+      <div class="panel report-table-panel">
+        <header class="panel-head"><div><h2>รายละเอียดการลงเวลา</h2><small id="report-caption"></small></div><span id="report-count">0 รายการ</span></header>
+        <div class="table-scroll"><table class="report-table">
+          <thead><tr><th>วันที่</th><th>พนักงาน</th><th>บทบาท</th><th>เข้างาน</th><th>เลิกงาน</th><th>ชั่วโมง</th><th>สถานะ</th><th>ตำแหน่งโดยประมาณ</th><th>หลักฐาน</th></tr></thead>
+          <tbody id="report-body"></tbody>
+        </table></div>
+      </div>
+    </section>
+
     <nav id="mobile-nav" class="mobile-nav" aria-label="เมนูมือถือ">
       <button data-view="today" class="active"><b>●</b><span>วันนี้</span></button>
       <button data-view="history"><b>≡</b><span>ประวัติ</span></button>
       <button data-view="users" data-role="admin" class="role-only hidden"><b>+</b><span>ผู้ใช้</span></button>
       <button data-view="manage" data-role="hr" class="role-only hidden"><b>✎</b><span>จัดการ</span></button>
+      <button data-view="report" data-role="admin,hr" class="role-only hidden"><b>▤</b><span>รายงาน</span></button>
     </nav>
   </div>
 

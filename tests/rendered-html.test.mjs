@@ -3,11 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("ships T TIME metadata and removes the starter preview", async () => {
-  const [page, layout, client, backend] = await Promise.all([
+  const [page, layout, client, backend, report] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/AttendanceApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/report/route.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /AttendanceApp/);
@@ -24,8 +25,20 @@ test("ships T TIME metadata and removes the starter preview", async () => {
   assert.match(client, /isLineBrowser/);
   assert.match(client, /line-browser-help/);
   assert.match(client, /attendanceDate/);
+  assert.match(client, /รายงานเวลาทำงาน/);
+  assert.match(client, /MapThumbnail/);
+  assert.match(client, /tile\.openstreetmap\.org/);
+  assert.match(client, /OpenStreetMap/);
   assert.match(backend, /function ttnWorkDate_/);
   assert.match(backend, /work_date: ttnWorkDate_/);
+  assert.match(backend, /Math\.min\(5000/);
+  assert.match(report, /user\.role !== "admin" && user\.role !== "hr"/);
+  assert.match(report, /limit: MAX_REPORT_ROWS/);
+  assert.match(report, /addWorksheet\("สรุปรายงาน"/);
+  assert.match(report, /addWorksheet\("สรุปรายบุคคล"/);
+  assert.match(report, /addWorksheet\("รายละเอียดลงเวลา"/);
+  assert.match(report, /sheet\.autoFilter/);
+  assert.match(report, /workbook\.xlsx\.writeBuffer/);
   assert.doesNotMatch(client, /พร้อม\{nextAction\}/);
   assert.doesNotMatch(client, /ถ่ายรูป ยืนยันตำแหน่ง แล้วบันทึกเวลาได้ในไม่กี่วินาที/);
   assert.doesNotMatch(page + layout + client, /SkeletonPreview|codex-preview/);

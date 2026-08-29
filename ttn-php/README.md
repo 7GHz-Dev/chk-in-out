@@ -2,6 +2,16 @@
 
 เวอร์ชันน้ำหนักเบาของ T TIME ใช้ HTML, CSS, Vanilla JavaScript และ PHP 8.5 บน Vercel โดยใช้บัญชีและข้อมูล Google Sheets/Drive ชุดเดียวกับระบบหลัก
 
+## ความสามารถหลัก
+
+- เข้างานและเลิกงานด้วยรูปภาพ ตำแหน่ง GPS และเวลาอ้างอิงประเทศไทย
+- ประวัติพร้อม thumbnail แผนที่ OpenStreetMap ของจุดเข้างานและเลิกงาน โดยโหลดแผนที่เมื่อเลื่อนใกล้ถึงรายการ
+- ผู้ดูแลระบบ (`admin`) และฝ่ายบุคคล (`hr`) ดูรายงานแบบ HR พร้อมกรองช่วงวันที่ บทบาท สถานะ และคำค้นได้
+- ดาวน์โหลดรายงาน Excel `.xlsx` ที่จัดรูปแบบแล้ว มีชีต `Summary`, `Employee Summary` (วันทำงานและชั่วโมงรวมรายคน) และ `Attendance Details` พร้อมชั่วโมงทำงาน สถานะ URL แผนที่ และ URL หลักฐานรูปภาพ
+- ฝ่ายบุคคลแก้ไขเวลาเข้า–ออกโดยยังเก็บหลักฐานเดิม และผู้ดูแลระบบจัดการบัญชีผู้ใช้
+
+รายงาน Excel สร้างด้วย Open XML ภายใน PHP โดยตรง ไม่ใช้ Composer ตัว endpoint `/api/report` ตรวจสิทธิ์ฝั่งเซิร์ฟเวอร์และอนุญาตเฉพาะ `admin`/`hr` ข้อมูลสูงสุด 5,000 รายการต่อไฟล์
+
 ## Environment variables
 
 - `GOOGLE_APPS_SCRIPT_URL` — URL ของ Apps Script web app
@@ -18,6 +28,15 @@ php -S localhost:8000 router.php
 
 Vercel ใช้ `vercel-php@0.9.0` และ PHP 8.5 การ deploy ควรตั้ง Root Directory เป็น `ttn-php`
 PHP Function ถูกกำหนดให้รันที่ Singapore (`sin1`) เพื่อลด latency สำหรับผู้ใช้ในประเทศไทย
+
+## ตรวจสอบก่อน deploy
+
+```bash
+node --check app.js
+node --test tests/smoke.test.mjs
+php -l api/index.php
+php tests/xlsx-smoke.php
+```
 
 ## การแชร์ผ่าน LINE
 

@@ -26,8 +26,11 @@ type Attendance = {
 };
 
 type ApiResponse = Record<string, unknown> & { ok?: boolean; error?: string };
-type View = "today" | "history" | "users" | "attendance-management";
+type View = "today" | "history" | "report" | "users" | "attendance-management";
 type LocationHelp = { href: string | null; instructions: string };
+type ReportStatus = "all" | "complete" | "open";
+
+const REPORT_PAGE_SIZE = 25;
 
 const roleLabels: Record<Role, string> = {
   user: "ผู้ใช้งาน",
@@ -157,6 +160,56 @@ function formatMonth(value: string) {
 
 function mapUrl(lat: number, lng: number) {
   return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+function bangkokDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return { year: value.year, month: value.month, day: value.day };
+}
+
+function currentMonthRange() {
+  const { year, month } = bangkokDateParts();
+  const lastDay = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate();
+  return { from: `${year}-${month}-01`, to: `${year}-${month}-${String(lastDay).padStart(2, "0")}` };
+}
+
+function workHours(record: Attendance) {
+  if (!record.check_out_at) return null;
+  const start = new Date(record.check_in_at).getTime();
+  const end = new Date(record.check_out_at).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  return (end - start) / 3_600_000;
+}
+
+function formatHours(value: number | null) {
+  return value === null ? "—" : `${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ชม.`;
+}
+
+const OSM_TILE_SIZE = 256;
+
+// ต่อไทล์ 2x2 รอบจุด แล้วเลื่อนให้จุดอยู่กึ่งกลางกรอบ — ไทล์คงขนาดจริง 256px ภาพแผนที่จึงไม่ถูกบีบ
+// และเหลือพื้นที่รอบจุดอย่างน้อย 128px ทุกด้านเสมอ ไม่ว่าจุดจะตกตรงไหนของไทล์
+function osmMiniMap(lat: number, lng: number, zoom = 15) {
+  const safeLat = Math.max(-85.0511, Math.min(85.0511, lat));
+  const scale = 2 ** zoom;
+  const x = ((lng + 180) / 360) * scale;
+  const sin = Math.sin((safeLat * Math.PI) / 180);
+  const y = (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale;
+  const originX = Math.round(x) - 1;
+  const originY = Math.min(Math.max(Math.round(y) - 1, 0), scale - 2);
+  const tiles = [0, 1].flatMap((row) => [0, 1].map((column) => ({
+    key: `${row}-${column}`,
+    src: `https://tile.openstreetmap.org/${zoom}/${(((originX + column) % scale) + scale) % scale}/${originY + row}.png`,
+    left: column * OSM_TILE_SIZE,
+    top: row * OSM_TILE_SIZE,
+  })));
+  return { tiles, offsetX: (x - originX) * OSM_TILE_SIZE, offsetY: (y - originY) * OSM_TILE_SIZE };
 }
 
 async function loadPhotoSource(file: File) {
@@ -329,6 +382,14 @@ export default function AttendanceApp() {
   const [lineBrowserHelp, setLineBrowserHelp] = useState(false);
   const [clock, setClock] = useState(new Date());
   const [query, setQuery] = useState("");
+  const [reportSource, setReportSource] = useState<Attendance[] | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportFrom, setReportFrom] = useState(() => currentMonthRange().from);
+  const [reportTo, setReportTo] = useState(() => currentMonthRange().to);
+  const [reportRole, setReportRole] = useState<Role | "all">("all");
+  const [reportStatus, setReportStatus] = useState<ReportStatus>("all");
+  const [reportQuery, setReportQuery] = useState("");
+  const [reportPage, setReportPage] = useState(1);
   const fileInput = useRef<HTMLInputElement>(null);
   const locationRequest = useRef<Promise<LocationData> | null>(null);
   const allowLineGps = useRef(false);
@@ -346,6 +407,11 @@ export default function AttendanceApp() {
   const loadUsers = useCallback(async () => {
     const data = await api("/api/users");
     setManagedUsers((data.users || []) as ManagedUser[]);
+  }, []);
+
+  const loadReportRows = useCallback(async () => {
+    const data = await api("/api/attendance?scope=all&limit=5000");
+    setReportSource((data.rows || []) as Attendance[]);
   }, []);
 
   useEffect(() => {
@@ -454,6 +520,7 @@ export default function AttendanceApp() {
       await api("/api/attendance", { method: "POST", body: form });
       setPhoto(null);
       setLocation(null);
+      setReportSource(null);
       setMessage({ type: "success", text: action === "check-in" ? "บันทึกเข้างานเรียบร้อย" : "บันทึกเลิกงานเรียบร้อย" });
       if (user) await loadAttendance(user);
     } catch (caught) {
@@ -469,6 +536,7 @@ export default function AttendanceApp() {
     setUser(null);
     setRows([]);
     setToday(null);
+    setReportSource(null);
     setPhase("login");
   }
 
@@ -478,6 +546,19 @@ export default function AttendanceApp() {
       await loadUsers();
     } catch (caught) {
       setMessage({ type: "error", text: thaiError(caught) });
+    }
+  }
+
+  async function openReport() {
+    setView("report");
+    if (reportSource || reportLoading) return;
+    setReportLoading(true);
+    try {
+      await loadReportRows();
+    } catch (caught) {
+      setMessage({ type: "error", text: thaiError(caught) });
+    } finally {
+      setReportLoading(false);
     }
   }
 
@@ -520,6 +601,7 @@ export default function AttendanceApp() {
         }),
       });
       setMessage({ type: "success", text: `แก้ไขเวลาของ ${record.name} เรียบร้อย` });
+      setReportSource(null);
       if (user) await loadAttendance(user);
     } catch (caught) {
       setMessage({ type: "error", text: thaiError(caught) });
@@ -533,6 +615,56 @@ export default function AttendanceApp() {
     if (!needle) return rows;
     return rows.filter((row) => `${row.name} ${row.username} ${roleLabels[row.role]} ${row.work_date}`.toLocaleLowerCase("th").includes(needle));
   }, [query, rows]);
+
+  const filteredReportRows = useMemo(() => {
+    const needle = reportQuery.trim().toLocaleLowerCase("th");
+    return (reportSource || rows).filter((record) => {
+      if (reportFrom && record.work_date < reportFrom) return false;
+      if (reportTo && record.work_date > reportTo) return false;
+      if (reportRole !== "all" && record.role !== reportRole) return false;
+      if (reportStatus === "complete" && !record.check_out_at) return false;
+      if (reportStatus === "open" && record.check_out_at) return false;
+      return !needle || `${record.name} ${record.username} ${roleLabels[record.role]} ${record.work_date}`.toLocaleLowerCase("th").includes(needle);
+    });
+  }, [reportFrom, reportQuery, reportRole, reportSource, reportStatus, reportTo, rows]);
+
+  const reportMetrics = useMemo(() => {
+    const completed = filteredReportRows.filter((record) => record.check_out_at);
+    const durations = completed.map(workHours).filter((value): value is number => value !== null);
+    return {
+      records: filteredReportRows.length,
+      employees: new Set(filteredReportRows.map((record) => record.user_id || record.username)).size,
+      completed: completed.length,
+      open: filteredReportRows.length - completed.length,
+      averageHours: durations.length ? durations.reduce((total, value) => total + value, 0) / durations.length : null,
+    };
+  }, [filteredReportRows]);
+
+  const reportRoleSummary = useMemo(() => Object.entries(roleLabels).map(([role, label]) => {
+    const roleRows = filteredReportRows.filter((record) => record.role === role);
+    const durations = roleRows.map(workHours).filter((value): value is number => value !== null);
+    return {
+      role,
+      label,
+      records: roleRows.length,
+      employees: new Set(roleRows.map((record) => record.user_id || record.username)).size,
+      completed: roleRows.filter((record) => record.check_out_at).length,
+      averageHours: durations.length ? durations.reduce((total, value) => total + value, 0) / durations.length : null,
+    };
+  }).filter((summary) => summary.records > 0), [filteredReportRows]);
+
+  const reportPageCount = Math.max(1, Math.ceil(filteredReportRows.length / REPORT_PAGE_SIZE));
+  const safeReportPage = Math.min(reportPage, reportPageCount);
+  const visibleReportRows = filteredReportRows.slice((safeReportPage - 1) * REPORT_PAGE_SIZE, safeReportPage * REPORT_PAGE_SIZE);
+  const reportDownloadUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    if (reportFrom) params.set("from", reportFrom);
+    if (reportTo) params.set("to", reportTo);
+    if (reportRole !== "all") params.set("role", reportRole);
+    if (reportStatus !== "all") params.set("status", reportStatus);
+    if (reportQuery.trim()) params.set("q", reportQuery.trim());
+    return `/api/report?${params.toString()}`;
+  }, [reportFrom, reportQuery, reportRole, reportStatus, reportTo]);
 
   if (phase === "loading") return <main className="loading-page"><Logo /><span className="loading-bar" /><p>กำลังเตรียมระบบ…</p></main>;
   if (phase === "setup") return <AuthPanel setup onSuccess={(next) => { setUser(next); setPhase("ready"); void loadAttendance(next); }} />;
@@ -548,6 +680,7 @@ export default function AttendanceApp() {
         <nav className="desktop-nav" aria-label="เมนูหลัก">
           <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}>วันนี้</button>
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>ประวัติ</button>
+          {(user.role === "admin" || user.role === "hr") && <button className={view === "report" ? "active" : ""} onClick={() => void openReport()}>รายงาน</button>}
           {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}>ผู้ใช้งาน</button>}
           {user.role === "hr" && <button className={view === "attendance-management" ? "active" : ""} onClick={() => setView("attendance-management")}>จัดการเวลา</button>}
         </nav>
@@ -661,6 +794,76 @@ export default function AttendanceApp() {
         </section>
       )}
 
+      {view === "report" && (user.role === "admin" || user.role === "hr") && (
+        <section className="content-page report-page">
+          <div className="content-heading report-heading">
+            <div><p className="eyebrow">HR ATTENDANCE REPORT</p><h1>รายงานเวลาทำงาน</h1><p>สรุปการเข้างาน–เลิกงานตามช่วงเวลา พร้อมดาวน์โหลด Excel ที่จัดรูปแบบแล้ว</p></div>
+            <a className="report-download" href={reportDownloadUrl}>ดาวน์โหลด Excel (.xlsx) ↓</a>
+          </div>
+
+          <div className="report-filters" aria-label="ตัวกรองรายงาน">
+            <label>ตั้งแต่วันที่<input type="date" value={reportFrom} max={reportTo || undefined} onChange={(event) => { setReportFrom(event.target.value); setReportPage(1); }} /></label>
+            <label>ถึงวันที่<input type="date" value={reportTo} min={reportFrom || undefined} onChange={(event) => { setReportTo(event.target.value); setReportPage(1); }} /></label>
+            <label>บทบาท<select value={reportRole} onChange={(event) => { setReportRole(event.target.value as Role | "all"); setReportPage(1); }}><option value="all">ทุกบทบาท</option>{Object.entries(roleLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+            <label>สถานะ<select value={reportStatus} onChange={(event) => { setReportStatus(event.target.value as ReportStatus); setReportPage(1); }}><option value="all">ทุกสถานะ</option><option value="complete">ลงเวลาครบ</option><option value="open">ยังไม่เลิกงาน</option></select></label>
+            <label className="report-search">ค้นหาพนักงาน<input value={reportQuery} onChange={(event) => { setReportQuery(event.target.value); setReportPage(1); }} placeholder="ชื่อหรือ username" /></label>
+            <div className="report-filter-actions">
+              <button type="button" onClick={() => { const range = currentMonthRange(); setReportFrom(range.from); setReportTo(range.to); setReportPage(1); }}>เดือนนี้</button>
+              <button type="button" onClick={() => { setReportFrom(""); setReportTo(""); setReportRole("all"); setReportStatus("all"); setReportQuery(""); setReportPage(1); }}>ล้างทั้งหมด</button>
+            </div>
+          </div>
+
+          {reportLoading && <div className="report-loading"><span className="loading-bar" /><p>กำลังโหลดข้อมูลรายงานทั้งหมด…</p></div>}
+
+          <div className="report-kpis" aria-label="สรุปรายงาน">
+            <article><small>รายการลงเวลา</small><strong>{reportMetrics.records.toLocaleString("th-TH")}</strong><span>รายการในช่วงที่เลือก</span></article>
+            <article><small>พนักงาน</small><strong>{reportMetrics.employees.toLocaleString("th-TH")}</strong><span>คนที่มีการลงเวลา</span></article>
+            <article className="kpi-complete"><small>ลงเวลาครบ</small><strong>{reportMetrics.completed.toLocaleString("th-TH")}</strong><span>มีเวลาเข้าและเลิกงาน</span></article>
+            <article className="kpi-open"><small>ยังไม่เลิกงาน</small><strong>{reportMetrics.open.toLocaleString("th-TH")}</strong><span>ควรตรวจสอบรายการค้าง</span></article>
+            <article><small>ชั่วโมงเฉลี่ย</small><strong>{reportMetrics.averageHours === null ? "—" : reportMetrics.averageHours.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong><span>เฉพาะรายการที่ลงเวลาครบ</span></article>
+          </div>
+
+          <section className="role-summary-card" aria-labelledby="role-summary-heading">
+            <div className="report-section-heading"><div><p className="eyebrow">SUMMARY BY ROLE</p><h2 id="role-summary-heading">สรุปตามบทบาท</h2></div><span>{reportRoleSummary.length} กลุ่ม</span></div>
+            {reportRoleSummary.length ? (
+              <div className="report-table-scroll">
+                <table className="role-summary-table">
+                  <thead><tr><th>บทบาท</th><th>พนักงาน</th><th>รายการ</th><th>ลงเวลาครบ</th><th>ยังไม่เลิกงาน</th><th>ชั่วโมงเฉลี่ย</th></tr></thead>
+                  <tbody>{reportRoleSummary.map((summary) => <tr key={summary.role}><td><span className={`role-badge role-${summary.role}`}>{summary.label}</span></td><td>{summary.employees}</td><td>{summary.records}</td><td>{summary.completed}</td><td>{summary.records - summary.completed}</td><td>{formatHours(summary.averageHours)}</td></tr>)}</tbody>
+                </table>
+              </div>
+            ) : <p className="report-empty-copy">ไม่พบข้อมูลตามตัวกรองที่เลือก</p>}
+          </section>
+
+          <section className="report-detail-card" aria-labelledby="report-detail-heading">
+            <div className="report-section-heading">
+              <div><p className="eyebrow">ATTENDANCE DETAILS</p><h2 id="report-detail-heading">รายละเอียดการลงเวลา</h2></div>
+              <span>หน้า {safeReportPage} / {reportPageCount} · {filteredReportRows.length.toLocaleString("th-TH")} รายการ</span>
+            </div>
+            {visibleReportRows.length ? (
+              <div className="report-table-scroll">
+                <table className="report-table">
+                  <thead><tr><th>วันที่</th><th>พนักงาน</th><th>บทบาท</th><th>เข้างาน</th><th>เลิกงาน</th><th>ชั่วโมง</th><th>สถานะ</th><th>ตำแหน่งโดยประมาณ</th></tr></thead>
+                  <tbody>{visibleReportRows.map((record) => (
+                    <tr key={record.id}>
+                      <td><strong>{formatDate(record.work_date)}</strong></td>
+                      <td><strong>{record.name}</strong><small>@{record.username}</small></td>
+                      <td><span className={`role-badge role-${record.role}`}>{roleLabels[record.role]}</span></td>
+                      <td>{formatTime(record.check_in_at)}</td>
+                      <td>{formatTime(record.check_out_at)}</td>
+                      <td>{formatHours(workHours(record))}</td>
+                      <td><span className={`complete-badge ${record.check_out_at ? "complete" : "pending"}`}>{record.check_out_at ? "ครบถ้วน" : "ยังไม่เลิกงาน"}</span></td>
+                      <td><div className="report-map-pair"><MapThumbnail lat={record.check_in_lat} lng={record.check_in_lng} label="จุดเข้างาน" />{record.check_out_lat !== null && record.check_out_lng !== null && <MapThumbnail lat={record.check_out_lat} lng={record.check_out_lng} label="จุดเลิกงาน" />}</div></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            ) : <div className="empty-state"><span>○</span><h3>ไม่พบข้อมูลรายงาน</h3><p>ลองเปลี่ยนช่วงวันที่หรือเงื่อนไขตัวกรอง</p></div>}
+            {reportPageCount > 1 && <div className="report-pagination"><button type="button" disabled={safeReportPage <= 1} onClick={() => setReportPage((page) => Math.max(1, page - 1))}>← ก่อนหน้า</button><span>{((safeReportPage - 1) * REPORT_PAGE_SIZE) + 1}–{Math.min(safeReportPage * REPORT_PAGE_SIZE, filteredReportRows.length)} จาก {filteredReportRows.length}</span><button type="button" disabled={safeReportPage >= reportPageCount} onClick={() => setReportPage((page) => Math.min(reportPageCount, page + 1))}>ถัดไป →</button></div>}
+          </section>
+        </section>
+      )}
+
       {view === "users" && user.role === "admin" && (
         <section className="content-page users-page">
           <div className="content-heading">
@@ -714,10 +917,30 @@ export default function AttendanceApp() {
       <nav className="mobile-nav" aria-label="เมนูหลักบนมือถือ">
         <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}><b>●</b><span>วันนี้</span></button>
         <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}><b>≡</b><span>ประวัติ</span></button>
+        {(user.role === "admin" || user.role === "hr") && <button className={view === "report" ? "active" : ""} onClick={() => void openReport()}><b>▤</b><span>รายงาน</span></button>}
         {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}><b>+</b><span>ผู้ใช้งาน</span></button>}
         {user.role === "hr" && <button className={view === "attendance-management" ? "active" : ""} onClick={() => setView("attendance-management")}><b>✎</b><span>จัดการเวลา</span></button>}
       </nav>
     </main>
+  );
+}
+
+function MapThumbnail({ lat, lng, label }: { lat: number; lng: number; label: string }) {
+  const map = osmMiniMap(lat, lng);
+  return (
+    <div className="map-thumbnail">
+      <a className="map-thumbnail-canvas" href={mapUrl(lat, lng)} target="_blank" rel="noreferrer" aria-label={`${label} เปิดใน Google Maps`}>
+        <span className="map-thumbnail-tiles" style={{ left: `calc(50% - ${map.offsetX}px)`, top: `calc(50% - ${map.offsetY}px)` }} aria-hidden="true">
+          {map.tiles.map((tile) => (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img key={tile.key} src={tile.src} alt="" loading="lazy" referrerPolicy="strict-origin-when-cross-origin" style={{ left: tile.left, top: tile.top }} />
+          ))}
+        </span>
+        <i className="map-thumbnail-pin" aria-hidden="true" />
+        <span className="map-thumbnail-label">{label} ↗</span>
+      </a>
+      <small>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a></small>
+    </div>
   );
 }
 
@@ -743,7 +966,7 @@ function HistoryList({ rows, compact = false, showNames = false }: { rows: Atten
                 <img src={record.check_in_photo_url} alt={`รูปเข้างาน ${record.name}`} loading="lazy" />
                 <span><strong>รูปเข้างาน</strong><small>{record.check_in_accuracy ? `GPS ±${Math.round(record.check_in_accuracy)} ม.` : "GPS"}</small></span>
               </a>
-              <a className="map-link" href={mapUrl(record.check_in_lat, record.check_in_lng)} target="_blank" rel="noreferrer">ดูตำแหน่งเข้างาน ↗</a>
+              <MapThumbnail lat={record.check_in_lat} lng={record.check_in_lng} label="จุดเข้างาน" />
               {record.check_out_photo_url && record.check_out_lat !== null && record.check_out_lng !== null ? (
                 <>
                   <a className="evidence" href={record.check_out_photo_url} target="_blank" rel="noreferrer">
@@ -751,7 +974,7 @@ function HistoryList({ rows, compact = false, showNames = false }: { rows: Atten
                     <img src={record.check_out_photo_url} alt={`รูปเลิกงาน ${record.name}`} loading="lazy" />
                     <span><strong>รูปเลิกงาน</strong><small>{record.check_out_accuracy ? `GPS ±${Math.round(record.check_out_accuracy)} ม.` : "GPS"}</small></span>
                   </a>
-                  <a className="map-link" href={mapUrl(record.check_out_lat, record.check_out_lng)} target="_blank" rel="noreferrer">ดูตำแหน่งเลิกงาน ↗</a>
+                  <MapThumbnail lat={record.check_out_lat} lng={record.check_out_lng} label="จุดเลิกงาน" />
                 </>
               ) : <div className="waiting-evidence">รอบันทึกเลิกงาน</div>}
             </div>

@@ -259,7 +259,7 @@ function ttnListAttendance_(query) {
     return String(right.work_date + right.check_in_at).localeCompare(String(left.work_date + left.check_in_at));
   });
   const requestedLimit = Number(query.limit || (filterUserId ? 120 : 250));
-  const limit = Math.max(1, Math.min(250, Number.isFinite(requestedLimit) ? requestedLimit : 120));
+  const limit = Math.max(1, Math.min(5000, Number.isFinite(requestedLimit) ? requestedLimit : 120));
   return { rows: rows.slice(0, limit), today: today };
 }
 

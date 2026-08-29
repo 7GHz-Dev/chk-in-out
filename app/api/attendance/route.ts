@@ -34,12 +34,15 @@ function publicAttendance(row: AttendanceRow) {
 export async function GET(request: Request) {
   const user = await currentUser(request);
   if (!user) return jsonError("unauthorized", 401);
-  const all = canViewAllAttendance(user.role) && new URL(request.url).searchParams.get("scope") === "all";
+  const url = new URL(request.url);
+  const all = canViewAllAttendance(user.role) && url.searchParams.get("scope") === "all";
+  const requestedLimit = Number.parseInt(url.searchParams.get("limit") || "", 10);
+  const limit = all && Number.isFinite(requestedLimit) ? Math.max(1, Math.min(5000, requestedLimit)) : all ? 250 : 120;
   try {
     const result = await callGoogleBackend<{ rows: AttendanceRow[]; today: AttendanceRow | null }>("listAttendance", {
       userId: all ? "" : user.id,
       todayUserId: user.id,
-      limit: all ? 250 : 120,
+      limit,
     });
     return jsonOk({
       rows: (result.rows || []).map(publicAttendance),
