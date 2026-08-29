@@ -9,7 +9,12 @@ export async function GET(request: Request) {
       callGoogleBackend<{ userCount: number }>("status"),
       currentUser(request),
     ]);
-    return jsonOk({ needsSetup: Number(userCount || 0) === 0, user });
+    return jsonOk({
+      needsSetup: Number(userCount || 0) === 0,
+      user,
+      // หน้าเว็บใช้ค่านี้เลือกว่าจะวาด thumbnail จากภาพ Google หรือจากไทล์ OpenStreetMap
+      mapProvider: process.env.GOOGLE_MAPS_API_KEY ? "google" : "osm",
+    });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "backend_error", 503);
   }

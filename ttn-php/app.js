@@ -53,6 +53,7 @@ const state = {
   reportInitialized: false,
   reportRows: null,
   reportBusy: false,
+  mapProvider: "osm",
 };
 
 async function api(path, options = {}) {
@@ -98,7 +99,8 @@ function timeText(value) {
 
 function dateText(value) {
   const date = validDate(value);
-  return date ? new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", weekday: "short", day: "numeric", month: "short", year: "numeric" }).format(date) : String(value || "—");
+  // ทั้งแอปใช้ dd/mm/yyyy ปี ค.ศ. — en-GB ให้รูปแบบนี้ตรง ๆ ไม่แปลงเป็น พ.ศ. แบบ th-TH
+  return date ? new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", day: "2-digit", month: "2-digit", year: "numeric" }).format(date) : String(value || "—");
 }
 
 function dateTile(value) {
@@ -109,15 +111,6 @@ function dateTile(value) {
   return `<span class="date-tile"><strong>${day}</strong><small>${escapeHtml(month)}</small></span>`;
 }
 
-function localInput(value) {
-  const date = validDate(value);
-  if (!date) return "";
-  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(date).map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
-}
-
 function bangkokDateKey(value = new Date()) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit",
@@ -125,16 +118,24 @@ function bangkokDateKey(value = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function mapThumbMarkup(latValue, lngValue, label = "ดูแผนที่") {
+// ขนาดกรอบแผนที่ (พิกเซล) — ส่งให้ Static Maps ตรง ๆ และใช้กำหนดกรอบผ่านตัวแปร CSS
+const MAP_SIZES = { card: { w: 320, h: 190 }, table: { w: 244, h: 152 } };
+
+function mapThumbMarkup(latValue, lngValue, label = "ดูแผนที่", variant = "card") {
   if (latValue == null || lngValue == null || latValue === "" || lngValue === "") return `<span class="map-unavailable">ไม่มีข้อมูลตำแหน่ง</span>`;
   const lat = Number(latValue);
   const lng = Number(lngValue);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return `<span class="map-unavailable">ไม่มีข้อมูลตำแหน่ง</span>`;
   const safeLat = lat.toFixed(6);
   const safeLng = lng.toFixed(6);
-  return `<div class="map-thumb" data-lat="${safeLat}" data-lng="${safeLng}">
+  const size = MAP_SIZES[variant] || MAP_SIZES.card;
+  const google = state.mapProvider === "google";
+  const href = google
+    ? `https://www.google.com/maps?q=${safeLat},${safeLng}`
+    : `https://www.openstreetmap.org/?mlat=${safeLat}&mlon=${safeLng}#map=16/${safeLat}/${safeLng}`;
+  return `<div class="map-thumb" data-lat="${safeLat}" data-lng="${safeLng}" data-w="${size.w}" data-h="${size.h}" style="--map-w:${size.w}px;--map-h:${size.h}px">
     <div class="map-frame"><span class="map-placeholder"><b>●</b> กำลังโหลดแผนที่</span></div>
-    <a href="https://www.openstreetmap.org/?mlat=${safeLat}&mlon=${safeLng}#map=16/${safeLat}/${safeLng}" target="_blank" rel="noreferrer">${escapeHtml(label)} · OpenStreetMap ↗</a>
+    <a href="${href}" target="_blank" rel="noreferrer">${escapeHtml(label)} · ${google ? "Google Maps" : "OpenStreetMap"} ↗</a>
   </div>`;
 }
 
@@ -143,14 +144,30 @@ function loadMapThumbnail(element) {
   const lat = Number(element.dataset.lat);
   const lng = Number(element.dataset.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-  const margin = 0.004;
-  const bbox = `${lng - margin},${lat - margin},${lng + margin},${lat + margin}`;
-  const iframe = document.createElement("iframe");
-  iframe.loading = "lazy";
-  iframe.title = "แผนที่ตำแหน่งโดยประมาณ";
-  iframe.referrerPolicy = "no-referrer";
-  iframe.src = `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik&marker=${encodeURIComponent(`${lat},${lng}`)}`;
-  element.querySelector(".map-frame")?.replaceChildren(iframe);
+  const frame = element.querySelector(".map-frame");
+  if (!frame) return;
+
+  if (state.mapProvider === "google") {
+    const width = Number(element.dataset.w) || MAP_SIZES.card.w;
+    const height = Number(element.dataset.h) || MAP_SIZES.card.h;
+    const image = document.createElement("img");
+    image.className = "map-photo";
+    image.loading = "lazy";
+    image.alt = "แผนที่บริเวณจุดที่บันทึก";
+    image.width = width;
+    image.height = height;
+    image.src = `/api/map?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}&w=${width}&h=${height}`;
+    frame.replaceChildren(image);
+  } else {
+    const margin = 0.004;
+    const bbox = `${lng - margin},${lat - margin},${lng + margin},${lat + margin}`;
+    const iframe = document.createElement("iframe");
+    iframe.loading = "lazy";
+    iframe.title = "แผนที่ตำแหน่งโดยประมาณ";
+    iframe.referrerPolicy = "no-referrer";
+    iframe.src = `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik&marker=${encodeURIComponent(`${lat},${lng}`)}`;
+    frame.replaceChildren(iframe);
+  }
   element.dataset.ready = "true";
 }
 
@@ -260,7 +277,7 @@ function reportEvidenceMarkup(record) {
 
 function reportRowMarkup(record) {
   const minutes = workedMinutes(record);
-  const checkoutMap = record.check_out_lat != null ? mapThumbMarkup(record.check_out_lat, record.check_out_lng, "เลิกงาน") : "";
+  const checkoutMap = record.check_out_lat != null ? mapThumbMarkup(record.check_out_lat, record.check_out_lng, "เลิกงาน", "table") : "";
   return `<tr>
     <td data-label="วันที่"><strong>${escapeHtml(dateText(record.work_date))}</strong></td>
     <td data-label="พนักงาน"><strong>${escapeHtml(record.name)}</strong><small>@${escapeHtml(record.username)}</small></td>
@@ -269,7 +286,7 @@ function reportRowMarkup(record) {
     <td data-label="เลิกงาน">${timeText(record.check_out_at)}${record.check_out_at ? `<small>±${Math.round(record.check_out_accuracy || 0)} ม.</small>` : ""}</td>
     <td data-label="ชั่วโมง">${escapeHtml(durationText(minutes))}</td>
     <td data-label="สถานะ"><span class="badge ${record.check_out_at ? "" : "pending"}">${record.check_out_at ? "บันทึกครบ" : "ยังไม่เลิกงาน"}</span></td>
-    <td data-label="ตำแหน่ง"><div class="report-map-stack">${mapThumbMarkup(record.check_in_lat, record.check_in_lng, "เข้างาน")}${checkoutMap}</div></td>
+    <td data-label="ตำแหน่ง"><div class="report-map-stack">${mapThumbMarkup(record.check_in_lat, record.check_in_lng, "เข้างาน", "table")}${checkoutMap}</div></td>
     <td data-label="หลักฐาน">${reportEvidenceMarkup(record)}</td>
   </tr>`;
 }
@@ -361,7 +378,6 @@ function renderAttendance() {
   $("#recent-list").innerHTML = state.rows.length ? state.rows.slice(0, 3).map(cardMarkup).join("") : empty();
   hydrateMapThumbnails($("#recent-list"));
   renderHistory();
-  if (state.user.role === "hr") renderManage();
   if (["admin", "hr"].includes(state.user.role) && state.view === "report") renderReport();
 }
 
@@ -371,16 +387,6 @@ function renderHistory() {
   releaseMapThumbnails($("#history-list"));
   $("#history-list").innerHTML = rows.length ? rows.map(historyMarkup).join("") : empty("ไม่พบข้อมูล");
   hydrateMapThumbnails($("#history-list"));
-}
-
-function renderManage() {
-  const rows = filteredRows($("#manage-search").value);
-  $("#manage-list").innerHTML = rows.length ? rows.map((record) => `<form class="manage-row" data-id="${escapeHtml(record.id)}">
-    <div class="manage-owner"><span class="avatar">${escapeHtml((record.name || "?").trim().charAt(0))}</span><span><strong>${escapeHtml(record.name)}</strong><small>@${escapeHtml(record.username)} · ${escapeHtml(roles[record.role] || record.role)}</small></span></div>
-    <label>เวลาเข้างาน<input name="checkInAt" type="datetime-local" value="${escapeHtml(localInput(record.check_in_at))}" required></label>
-    <label>เวลาเลิกงาน<input name="checkOutAt" type="datetime-local" value="${escapeHtml(localInput(record.check_out_at))}"></label>
-    <button type="submit">บันทึก</button>
-  </form>`).join("") : empty("ไม่พบข้อมูล");
 }
 
 async function loadAttendance() {
@@ -415,6 +421,7 @@ function showLogin() {
 async function initialize() {
   try {
     const data = await api("/api/session");
+    if (data.mapProvider === "google") state.mapProvider = "google";
     if (!data.user) return showLogin();
     showApp(data.user);
     await loadAttendance();
@@ -427,7 +434,6 @@ async function initialize() {
 
 function switchView(view) {
   if (view === "users" && state.user.role !== "admin") view = "today";
-  if (view === "manage" && state.user.role !== "hr") view = "today";
   if (view === "report" && !["admin", "hr"].includes(state.user.role)) view = "today";
   state.view = view;
   $$(".view").forEach((element) => element.classList.toggle("hidden", element.id !== `view-${view}`));
@@ -651,7 +657,6 @@ $("#copy-external-link").addEventListener("click", async () => {
   }
 });
 $("#history-search").addEventListener("input", renderHistory);
-$("#manage-search").addEventListener("input", renderManage);
 $("#report-filters").addEventListener("input", renderReport);
 $("#report-filters").addEventListener("change", renderReport);
 $("#report-reset").addEventListener("click", () => { $("#report-filters").reset(); renderReport(); });
@@ -669,25 +674,12 @@ $("#user-form").addEventListener("submit", async (event) => {
   finally { button.disabled = false; }
 });
 
-$("#manage-list").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.target.closest("form");
-  if (!form) return;
-  const button = form.querySelector("button");
-  const fields = new FormData(form);
-  button.disabled = true;
-  try {
-    await api("/api/attendance", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: form.dataset.id, checkInAt: fields.get("checkInAt"), checkOutAt: fields.get("checkOutAt") }) });
-    state.reportRows = null;
-    toast("แก้ไขเวลาเรียบร้อย"); await loadAttendance();
-  } catch (error) { toast(errorText(error), "error"); }
-  finally { button.disabled = false; }
-});
 
 function updateClock() {
   const now = new Date();
   $("#clock-time").textContent = new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit", hour12: false }).format(now);
-  $("#clock-date").textContent = new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", dateStyle: "full" }).format(now);
+  const weekday = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { timeZone: "Asia/Bangkok", weekday: "long" }).format(now);
+  $("#clock-date").textContent = `${weekday} ${new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", day: "2-digit", month: "2-digit", year: "numeric" }).format(now)}`;
 }
 
 updateClock();

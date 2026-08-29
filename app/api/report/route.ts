@@ -212,11 +212,12 @@ function protectedPhotoUrl(origin: string, fileId: unknown) {
   return url.toString();
 }
 
+// ใช้ dd/mm/yyyy ปี ค.ศ. เหมือนในแอป — th-TH จะได้ปี พ.ศ. ซึ่งอ่านสลับกับตัวเลขในชีต
 function thaiDateLabel(value: string) {
   if (!isIsoDate(value)) return "ไม่ระบุ";
-  return new Intl.DateTimeFormat("th-TH", {
+  return new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
-    month: "short",
+    month: "2-digit",
     year: "numeric",
     timeZone: "Asia/Bangkok",
   }).format(new Date(`${value}T12:00:00.000Z`));

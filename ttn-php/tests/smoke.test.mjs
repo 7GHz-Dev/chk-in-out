@@ -29,6 +29,10 @@ test("ships the PHP API and lightweight attendance UI", async () => {
   assert.match(javascript, /\/api\/report-data/);
   assert.match(javascript, /IntersectionObserver/);
   assert.match(javascript, /openstreetmap\.org\/export\/embed/);
+  assert.match(javascript, /\/api\/map\?lat=/);
+  assert.match(javascript, /en-GB/);
+  assert.match(php, /maps\/api\/staticmap/);
+  assert.doesNotMatch(html + javascript, /จัดการเวลา/);
   assert.match(css, /\.map-thumb/);
   assert.match(php, /hash_pbkdf2\('sha256'/);
   assert.match(php, /hash_hmac\('sha256'/);

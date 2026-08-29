@@ -49,7 +49,6 @@
         <button data-view="today" class="active">วันนี้</button>
         <button data-view="history">ประวัติ</button>
         <button data-view="users" data-role="admin" class="role-only hidden">ผู้ใช้งาน</button>
-        <button data-view="manage" data-role="hr" class="role-only hidden">จัดการเวลา</button>
         <button data-view="report" data-role="admin,hr" class="role-only hidden">รายงาน</button>
       </nav>
       <div class="profile">
@@ -126,14 +125,6 @@
       </div>
     </section>
 
-    <section id="view-manage" class="view content-page hidden">
-      <header class="page-head">
-        <div><p class="eyebrow">ฝ่ายบุคคล</p><h1>จัดการเวลาเข้า–ออก</h1><p>แก้ไขวันที่และเวลา โดยเก็บหลักฐานเดิมไว้</p></div>
-        <input id="manage-search" class="search" type="search" placeholder="ค้นหาชื่อ วันที่ หรือ role">
-      </header>
-      <div id="manage-list" class="manage-list"></div>
-    </section>
-
     <section id="view-report" class="view content-page report-page hidden">
       <header class="page-head report-head">
         <div><p class="eyebrow">HR ATTENDANCE REPORT</p><h1>รายงานเวลา</h1><p>สรุปข้อมูลการมาทำงาน พร้อมหลักฐานรูปภาพและตำแหน่ง</p></div>
@@ -172,7 +163,6 @@
       <button data-view="today" class="active"><b>●</b><span>วันนี้</span></button>
       <button data-view="history"><b>≡</b><span>ประวัติ</span></button>
       <button data-view="users" data-role="admin" class="role-only hidden"><b>+</b><span>ผู้ใช้</span></button>
-      <button data-view="manage" data-role="hr" class="role-only hidden"><b>✎</b><span>จัดการ</span></button>
       <button data-view="report" data-role="admin,hr" class="role-only hidden"><b>▤</b><span>รายงาน</span></button>
     </nav>
   </div>

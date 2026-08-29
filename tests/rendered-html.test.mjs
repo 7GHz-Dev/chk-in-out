@@ -15,7 +15,6 @@ test("ships T TIME metadata and removes the starter preview", async () => {
   assert.match(layout, /T TIME/);
   assert.match(client, /เข้างาน/);
   assert.match(client, /เลิกงาน/);
-  assert.match(client, /attendance-management/);
   assert.match(client, /enableHighAccuracy: false/);
   assert.match(client, /enableHighAccuracy: true/);
   assert.match(client, /location-help/);
@@ -28,6 +27,9 @@ test("ships T TIME metadata and removes the starter preview", async () => {
   assert.match(client, /รายงานเวลาทำงาน/);
   assert.match(client, /MapThumbnail/);
   assert.match(client, /tile\.openstreetmap\.org/);
+  assert.match(client, /\/api\/map\?lat=/);
+  assert.match(client, /formatWeekdayDate/);
+  assert.doesNotMatch(client, /จัดการเวลา/);
   assert.match(client, /OpenStreetMap/);
   assert.match(backend, /function ttnWorkDate_/);
   assert.match(backend, /work_date: ttnWorkDate_/);

@@ -34,6 +34,12 @@ set_exception_handler(function (Throwable $error): void {
     fail('server_error', 500);
 });
 
+/** ค่าที่ไม่ตั้งก็ยังทำงานต่อได้ (เช่น API key ของแผนที่) — คืนสตริงว่างแทนการโยน error */
+function env_optional(string $name): string
+{
+    return trim((string) getenv($name));
+}
+
 function env_required(string $name): string
 {
     $value = trim((string) getenv($name));
@@ -335,7 +341,8 @@ function report_role_label(string $role): string
 
 function report_filter_label(array $filters): string
 {
-    $period = ($filters['from'] ?: 'ทั้งหมด') . ' ถึง ' . ($filters['to'] ?: 'ทั้งหมด');
+    $day = static fn (string $key): string => $key === '' ? 'ทั้งหมด' : implode('/', array_reverse(explode('-', $key)));
+    $period = $day($filters['from']) . ' ถึง ' . $day($filters['to']);
     $role = $filters['role'] === '' ? 'ทุกบทบาท' : report_role_label($filters['role']);
     $status = match ($filters['status']) { 'complete' => 'บันทึกครบ', 'working' => 'ยังไม่เลิกงาน', default => 'ทุกสถานะ' };
     return 'ช่วงวันที่: ' . $period . ' | บทบาท: ' . $role . ' | สถานะ: ' . $status . ($filters['search'] !== '' ? ' | ค้นหา: ' . $filters['search'] : '');
@@ -620,7 +627,7 @@ if ($route === 'health' && $method === 'GET') {
 }
 
 if ($route === 'session' && $method === 'GET') {
-    respond(['user' => current_user(), 'needsSetup' => false]);
+    respond(['user' => current_user(), 'needsSetup' => false, 'mapProvider' => env_optional('GOOGLE_MAPS_API_KEY') === '' ? 'osm' : 'google']);
 }
 
 if ($route === 'login' && $method === 'POST') {
@@ -684,6 +691,38 @@ if ($route === 'report' && $method === 'GET') {
     header('Cache-Control: private, no-store');
     header('X-Content-Type-Options: nosniff');
     echo $workbook;
+    exit;
+}
+
+if ($route === 'map' && $method === 'GET') {
+    require_user();
+    $key = env_optional('GOOGLE_MAPS_API_KEY');
+    if ($key === '') fail('maps_not_configured', 503);
+    $lat = (float) ($_GET['lat'] ?? 'nan');
+    $lng = (float) ($_GET['lng'] ?? 'nan');
+    if (!is_finite($lat) || !is_finite($lng) || abs($lat) > 90 || abs($lng) > 180) fail('invalid_coordinates');
+    $width = max(80, min(640, (int) ($_GET['w'] ?? 320)));
+    $height = max(80, min(640, (int) ($_GET['h'] ?? 190)));
+    $zoom = max(1, min(20, (int) ($_GET['zoom'] ?? 16)));
+    $center = number_format($lat, 6, '.', '') . ',' . number_format($lng, 6, '.', '');
+    $url = 'https://maps.googleapis.com/maps/api/staticmap?' . http_build_query([
+        'center' => $center, 'zoom' => $zoom, 'size' => $width . 'x' . $height, 'scale' => 2,
+        'maptype' => 'roadmap', 'language' => 'th', 'region' => 'TH',
+        'markers' => 'color:0xed5f42|' . $center, 'key' => $key,
+    ]);
+    $context = stream_context_create(['http' => ['timeout' => 8, 'ignore_errors' => true]]);
+    $image = @file_get_contents($url, false, $context);
+    $type = '';
+    foreach ($http_response_header ?? [] as $line) {
+        if (stripos($line, 'content-type:') === 0) $type = trim(substr($line, 13));
+    }
+    if ($image === false || stripos($type, 'image/') !== 0) fail('maps_unavailable', 502);
+    header('Content-Type: ' . $type);
+    header('Content-Length: ' . strlen($image));
+    // ภาพแผนที่ของพิกัดหนึ่ง ๆ ไม่มีวันเปลี่ยน เก็บไว้ในเครื่องผู้ใช้ได้ยาว ๆ
+    header('Cache-Control: private, max-age=604800, immutable');
+    header('X-Content-Type-Options: nosniff');
+    echo $image;
     exit;
 }
 

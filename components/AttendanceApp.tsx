@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, createContext, FormEvent, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 type Role = "user" | "admin" | "hr" | "employee-driver" | "employee-office";
 type AppUser = { id: string; username: string; name: string; role: Role; active: boolean };
@@ -26,11 +26,20 @@ type Attendance = {
 };
 
 type ApiResponse = Record<string, unknown> & { ok?: boolean; error?: string };
-type View = "today" | "history" | "report" | "users" | "attendance-management";
+type View = "today" | "history" | "report" | "users";
 type LocationHelp = { href: string | null; instructions: string };
 type ReportStatus = "all" | "complete" | "open";
 
 const REPORT_PAGE_SIZE = 25;
+
+type MapProvider = "google" | "osm";
+const MapProviderContext = createContext<MapProvider>("osm");
+
+// ขนาดภาพแผนที่ (พิกเซล) — ส่งให้ Static Maps ตรง ๆ และใช้กำหนดกรอบใน CSS ด้วย
+const MAP_SIZES = {
+  card: { width: 320, height: 190 },
+  table: { width: 244, height: 152 },
+} as const;
 
 const roleLabels: Record<Role, string> = {
   user: "ผู้ใช้งาน",
@@ -136,16 +145,24 @@ function formatTime(value: string | null) {
   }).format(date);
 }
 
+// ทั้งแอปใช้ dd/mm/yyyy ปี ค.ศ. — en-GB ให้รูปแบบนี้ตรง ๆ และไม่แปลงเป็น พ.ศ. แบบ th-TH
 function formatDate(value: string) {
   const date = attendanceDate(value);
   if (!date) return value || "—";
-  return new Intl.DateTimeFormat("th-TH", {
+  return new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Bangkok",
-    weekday: "short",
-    day: "numeric",
-    month: "short",
+    day: "2-digit",
+    month: "2-digit",
     year: "numeric",
   }).format(date);
+}
+
+function formatWeekdayDate(date: Date) {
+  const weekday = new Intl.DateTimeFormat("th-TH-u-ca-gregory", { timeZone: "Asia/Bangkok", weekday: "long" }).format(date);
+  const day = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Bangkok", day: "2-digit", month: "2-digit", year: "numeric",
+  }).format(date);
+  return `${weekday} ${day}`;
 }
 
 function formatDay(value: string) {
@@ -191,10 +208,10 @@ function formatHours(value: number | null) {
   return value === null ? "—" : `${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ชม.`;
 }
 
-const OSM_TILE_SIZE = 256;
+// ไทล์จริงกว้าง 256px แต่วาดที่ 360px ทั้งบล็อก (ขยายเท่ากันทุกด้าน ภาพจึงไม่ผิดสัดส่วน)
+// บล็อก 2x2 = 720px จึงเหลือแผนที่รอบจุดอย่างน้อย 180px ทุกด้าน ครอบคลุมกรอบใหญ่สุดที่ใช้อยู่
+const OSM_TILE_SIZE = 360;
 
-// ต่อไทล์ 2x2 รอบจุด แล้วเลื่อนให้จุดอยู่กึ่งกลางกรอบ — ไทล์คงขนาดจริง 256px ภาพแผนที่จึงไม่ถูกบีบ
-// และเหลือพื้นที่รอบจุดอย่างน้อย 128px ทุกด้านเสมอ ไม่ว่าจุดจะตกตรงไหนของไทล์
 function osmMiniMap(lat: number, lng: number, zoom = 15) {
   const safeLat = Math.max(-85.0511, Math.min(85.0511, lat));
   const scale = 2 ** zoom;
@@ -285,23 +302,6 @@ function isLocationPermissionDenied(error: unknown) {
   return Boolean(error && typeof error === "object" && "code" in error && Number((error as { code: unknown }).code) === 1);
 }
 
-function toBangkokDateTimeInput(value: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Bangkok",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(date);
-  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}`;
-}
-
 function AuthPanel({ setup, onSuccess }: { setup: boolean; onSuccess: (user: AppUser) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -390,6 +390,7 @@ export default function AttendanceApp() {
   const [reportStatus, setReportStatus] = useState<ReportStatus>("all");
   const [reportQuery, setReportQuery] = useState("");
   const [reportPage, setReportPage] = useState(1);
+  const [mapProvider, setMapProvider] = useState<MapProvider>("osm");
   const fileInput = useRef<HTMLInputElement>(null);
   const locationRequest = useRef<Promise<LocationData> | null>(null);
   const allowLineGps = useRef(false);
@@ -418,6 +419,7 @@ export default function AttendanceApp() {
     void (async () => {
       try {
         const data = await api("/api/session");
+        if (data.mapProvider === "google") setMapProvider("google");
         if (data.needsSetup) return setPhase("setup");
         if (!data.user) return setPhase("login");
         const activeUser = data.user as AppUser;
@@ -584,32 +586,6 @@ export default function AttendanceApp() {
     }
   }
 
-  async function updateAttendance(event: FormEvent<HTMLFormElement>, record: Attendance) {
-    event.preventDefault();
-    setBusy(true);
-    setMessage(null);
-    const fields = new FormData(event.currentTarget);
-    const checkOutAt = String(fields.get("checkOutAt") || "");
-    try {
-      await api("/api/attendance", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: record.id,
-          checkInAt: fields.get("checkInAt"),
-          ...(checkOutAt ? { checkOutAt } : {}),
-        }),
-      });
-      setMessage({ type: "success", text: `แก้ไขเวลาของ ${record.name} เรียบร้อย` });
-      setReportSource(null);
-      if (user) await loadAttendance(user);
-    } catch (caught) {
-      setMessage({ type: "error", text: thaiError(caught) });
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const filteredRows = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("th");
     if (!needle) return rows;
@@ -674,6 +650,7 @@ export default function AttendanceApp() {
   const todayState = !today ? "not-started" : today.check_out_at ? "complete" : "working";
   const statusText = todayState === "not-started" ? "ยังไม่ได้เข้างาน" : todayState === "working" ? "กำลังทำงาน" : "บันทึกครบแล้ว";
   return (
+    <MapProviderContext value={mapProvider}>
     <main className="app-shell">
       <header className="topbar">
         <button className="logo-button" type="button" onClick={() => setView("today")}><Logo /></button>
@@ -682,7 +659,6 @@ export default function AttendanceApp() {
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>ประวัติ</button>
           {(user.role === "admin" || user.role === "hr") && <button className={view === "report" ? "active" : ""} onClick={() => void openReport()}>รายงาน</button>}
           {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}>ผู้ใช้งาน</button>}
-          {user.role === "hr" && <button className={view === "attendance-management" ? "active" : ""} onClick={() => setView("attendance-management")}>จัดการเวลา</button>}
         </nav>
         <div className="profile-menu">
           <span className="avatar">{user.name.trim().charAt(0)}</span>
@@ -735,7 +711,7 @@ export default function AttendanceApp() {
               </div>
               <time>
                 <strong>{new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false }).format(clock)}</strong>
-                <small>{new Intl.DateTimeFormat("th-TH", { dateStyle: "full", timeZone: "Asia/Bangkok" }).format(clock)}</small>
+                <small>{formatWeekdayDate(clock)}</small>
               </time>
             </div>
 
@@ -853,7 +829,7 @@ export default function AttendanceApp() {
                       <td>{formatTime(record.check_out_at)}</td>
                       <td>{formatHours(workHours(record))}</td>
                       <td><span className={`complete-badge ${record.check_out_at ? "complete" : "pending"}`}>{record.check_out_at ? "ครบถ้วน" : "ยังไม่เลิกงาน"}</span></td>
-                      <td><div className="report-map-pair"><MapThumbnail lat={record.check_in_lat} lng={record.check_in_lng} label="จุดเข้างาน" />{record.check_out_lat !== null && record.check_out_lng !== null && <MapThumbnail lat={record.check_out_lat} lng={record.check_out_lng} label="จุดเลิกงาน" />}</div></td>
+                      <td><div className="report-map-pair"><MapThumbnail lat={record.check_in_lat} lng={record.check_in_lng} label="จุดเข้างาน" variant="table" />{record.check_out_lat !== null && record.check_out_lng !== null && <MapThumbnail lat={record.check_out_lat} lng={record.check_out_lng} label="จุดเลิกงาน" variant="table" />}</div></td>
                     </tr>
                   ))}</tbody>
                 </table>
@@ -892,55 +868,52 @@ export default function AttendanceApp() {
         </section>
       )}
 
-      {view === "attendance-management" && user.role === "hr" && (
-        <section className="content-page attendance-management-page">
-          <div className="content-heading">
-            <div><p className="eyebrow">ฝ่ายบุคคล</p><h1>จัดการเวลาเข้า–ออก</h1><p>แก้ไขวันที่และเวลาที่บันทึกผิด โดยยังคงหลักฐานรูปและตำแหน่งเดิมไว้</p></div>
-            <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ค้นหาชื่อ วันที่ หรือ role" /></label>
-          </div>
-          <div className="attendance-edit-list">
-            {filteredRows.length ? filteredRows.map((record) => (
-              <form className="attendance-edit-row" key={`${record.id}-${record.check_in_at}-${record.check_out_at || "open"}`} onSubmit={(event) => void updateAttendance(event, record)}>
-                <div className="attendance-edit-owner">
-                  <span className="avatar">{record.name.trim().charAt(0)}</span>
-                  <span><strong>{record.name}</strong><small>@{record.username} · {roleLabels[record.role]}</small></span>
-                </div>
-                <label>เวลาเข้างาน<input name="checkInAt" type="datetime-local" defaultValue={toBangkokDateTimeInput(record.check_in_at)} required /></label>
-                <label>เวลาเลิกงาน<input name="checkOutAt" type="datetime-local" defaultValue={toBangkokDateTimeInput(record.check_out_at)} /></label>
-                <button type="submit" disabled={busy}>บันทึก</button>
-              </form>
-            )) : <div className="empty-state"><span>○</span><h3>ไม่พบข้อมูล</h3><p>ลองเปลี่ยนคำค้นหาอีกครั้ง</p></div>}
-          </div>
-        </section>
-      )}
-
       <nav className="mobile-nav" aria-label="เมนูหลักบนมือถือ">
         <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}><b>●</b><span>วันนี้</span></button>
         <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}><b>≡</b><span>ประวัติ</span></button>
         {(user.role === "admin" || user.role === "hr") && <button className={view === "report" ? "active" : ""} onClick={() => void openReport()}><b>▤</b><span>รายงาน</span></button>}
         {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}><b>+</b><span>ผู้ใช้งาน</span></button>}
-        {user.role === "hr" && <button className={view === "attendance-management" ? "active" : ""} onClick={() => setView("attendance-management")}><b>✎</b><span>จัดการเวลา</span></button>}
       </nav>
     </main>
+    </MapProviderContext>
   );
 }
 
-function MapThumbnail({ lat, lng, label }: { lat: number; lng: number; label: string }) {
-  const map = osmMiniMap(lat, lng);
+function MapThumbnail({ lat, lng, label, variant = "card" }: { lat: number; lng: number; label: string; variant?: keyof typeof MAP_SIZES }) {
+  const provider = useContext(MapProviderContext);
+  const { width, height } = MAP_SIZES[variant];
+  const frame = { width, maxWidth: "100%" } satisfies CSSProperties;
+
   return (
-    <div className="map-thumbnail">
-      <a className="map-thumbnail-canvas" href={mapUrl(lat, lng)} target="_blank" rel="noreferrer" aria-label={`${label} เปิดใน Google Maps`}>
-        <span className="map-thumbnail-tiles" style={{ left: `calc(50% - ${map.offsetX}px)`, top: `calc(50% - ${map.offsetY}px)` }} aria-hidden="true">
-          {map.tiles.map((tile) => (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img key={tile.key} src={tile.src} alt="" loading="lazy" referrerPolicy="strict-origin-when-cross-origin" style={{ left: tile.left, top: tile.top }} />
-          ))}
-        </span>
-        <i className="map-thumbnail-pin" aria-hidden="true" />
+    <div className="map-thumbnail" style={frame}>
+      <a className="map-thumbnail-canvas" style={{ height }} href={mapUrl(lat, lng)} target="_blank" rel="noreferrer" aria-label={`${label} เปิดใน Google Maps`}>
+        {provider === "google" ? <GoogleMapImage lat={lat} lng={lng} label={label} width={width} height={height} /> : <OsmMapTiles lat={lat} lng={lng} />}
         <span className="map-thumbnail-label">{label} ↗</span>
       </a>
-      <small>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a></small>
+      {provider === "google" ? null : <small>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a></small>}
     </div>
+  );
+}
+
+/** ภาพนิ่งจาก Google Static Maps ผ่าน /api/map — หมุดถูกวาดมาในภาพแล้ว ไม่ต้องซ้อนเอง */
+function GoogleMapImage({ lat, lng, label, width, height }: { lat: number; lng: number; label: string; width: number; height: number }) {
+  const source = `/api/map?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}&w=${width}&h=${height}`;
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img className="map-thumbnail-photo" src={source} alt={`แผนที่บริเวณ${label}`} width={width} height={height} loading="lazy" />;
+}
+
+function OsmMapTiles({ lat, lng }: { lat: number; lng: number }) {
+  const map = osmMiniMap(lat, lng);
+  return (
+    <>
+      <span className="map-thumbnail-tiles" style={{ left: `calc(50% - ${map.offsetX}px)`, top: `calc(50% - ${map.offsetY}px)` }} aria-hidden="true">
+        {map.tiles.map((tile) => (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img key={tile.key} src={tile.src} alt="" loading="lazy" referrerPolicy="strict-origin-when-cross-origin" style={{ left: tile.left, top: tile.top }} />
+        ))}
+      </span>
+      <i className="map-thumbnail-pin" aria-hidden="true" />
+    </>
   );
 }
 
