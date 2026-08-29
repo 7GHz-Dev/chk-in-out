@@ -29,10 +29,6 @@ type ApiResponse = Record<string, unknown> & { ok?: boolean; error?: string };
 type View = "today" | "history" | "dashboard" | "report" | "users" | "settings";
 type LocationHelp = { href: string | null; instructions: string };
 type ReportStatus = "all" | "complete" | "open";
-type ReportEvent = {
-  key: string; record: Attendance; kind: "in" | "out"; at: string;
-  photoUrl: string; lat: number; lng: number; accuracy: number | null;
-};
 
 const REPORT_PAGE_SIZE = 25;
 
@@ -187,6 +183,51 @@ function formatDay(value: string) {
 function formatMonth(value: string) {
   const date = attendanceDate(value);
   return date ? new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "Asia/Bangkok" }).format(date) : "—";
+}
+
+const OLC_ALPHABET = "23456789CFGHJMPQRVWX";
+const OLC_LAT_PRECISION = 25_000_000;
+const OLC_LNG_PRECISION = 8_192_000;
+const PLUS_CODE_PATTERN = /^[23456789CFGHJMPQRVWX]{2,8}\+[23456789CFGHJMPQRVWX]{2,3}\s*/i;
+
+/**
+ * Plus Code (Open Location Code) ของ Google คำนวณจากพิกัดได้ตรง ๆ ไม่ต้องเรียกบริการภายนอก
+ * จึงขึ้นทันทีที่เปิดตาราง ส่วนชื่อตำบล/อำเภอค่อยเติมทีหลังเมื่อผลค้นที่อยู่กลับมา
+ */
+function plusCode(lat: number, lng: number) {
+  const latitude = Math.min(90, Math.max(-90, lat));
+  let longitude = lng;
+  while (longitude < -180) longitude += 360;
+  while (longitude >= 180) longitude -= 360;
+
+  let latValue = Math.floor(Math.round((latitude + 90) * OLC_LAT_PRECISION * 1e6) / 1e6);
+  let lngValue = Math.floor(Math.round((longitude + 180) * OLC_LNG_PRECISION * 1e6) / 1e6);
+  if (latValue >= 180 * OLC_LAT_PRECISION) latValue = 180 * OLC_LAT_PRECISION - 1;
+
+  let code = "";
+  // ห้าหลักท้ายเป็นตารางย่อย 4x5 ต่อหนึ่งขั้น
+  for (let step = 0; step < 5; step += 1) {
+    code = OLC_ALPHABET.charAt((latValue % 5) * 4 + (lngValue % 4)) + code;
+    latValue = Math.floor(latValue / 5);
+    lngValue = Math.floor(lngValue / 4);
+  }
+  // สิบหลักแรกเป็นคู่ละติจูด/ลองจิจูด ฐาน 20
+  for (let step = 0; step < 5; step += 1) {
+    code = OLC_ALPHABET.charAt(latValue % 20) + OLC_ALPHABET.charAt(lngValue % 20) + code;
+    latValue = Math.floor(latValue / 20);
+    lngValue = Math.floor(lngValue / 20);
+  }
+  return `${code.slice(0, 8)}+${code.slice(8, 11)}`;
+}
+
+/** รูปสั้นที่ Google แสดงคู่กับชื่อพื้นที่ เช่น 3V5X+63G */
+function shortPlusCode(full: string) {
+  return full.slice(4);
+}
+
+/** ตัด Plus Code ที่ผู้ให้บริการใส่มาข้างหน้าออก เหลือแต่ชื่อตำบล/อำเภอ/จังหวัด */
+function localityOf(address: string | undefined) {
+  return String(address || "").replace(PLUS_CODE_PATTERN, "").trim();
 }
 
 function pointKey(lat: number, lng: number) {
@@ -815,32 +856,6 @@ export default function AttendanceApp() {
     };
   }, [dashboardMonth, reportSource, rows, workConfig]);
 
-  const visibleEvents = useMemo(() => visibleReportRows.flatMap((record) => {
-    const events: ReportEvent[] = [{
-      key: `${record.id}-in`,
-      record,
-      kind: "in",
-      at: record.check_in_at,
-      photoUrl: record.check_in_photo_url,
-      lat: record.check_in_lat,
-      lng: record.check_in_lng,
-      accuracy: record.check_in_accuracy,
-    }];
-    if (record.check_out_at && record.check_out_lat !== null && record.check_out_lng !== null) {
-      events.push({
-        key: `${record.id}-out`,
-        record,
-        kind: "out",
-        at: record.check_out_at,
-        photoUrl: record.check_out_photo_url || "",
-        lat: record.check_out_lat,
-        lng: record.check_out_lng,
-        accuracy: record.check_out_accuracy,
-      });
-    }
-    return events;
-  }), [visibleReportRows]);
-
   // ที่อยู่ค้นทีละชุดเฉพาะพิกัดที่ยังไม่รู้จัก — พิกัดซ้ำ (ที่ทำงานเดิม) ใช้คำตอบเดิมได้เลย
   const addressQueue = useMemo(() => {
     const keys = new Set<string>();
@@ -849,13 +864,16 @@ export default function AttendanceApp() {
       const key = pointKey(lat, lng);
       if (!(key in addresses)) keys.add(key);
     };
-    visibleEvents.forEach((event) => collect(event.lat, event.lng));
+    visibleReportRows.forEach((record) => {
+      collect(record.check_in_lat, record.check_in_lng);
+      collect(record.check_out_lat, record.check_out_lng);
+    });
     filteredRows.slice(0, 20).forEach((record) => {
       collect(record.check_in_lat, record.check_in_lng);
       collect(record.check_out_lat, record.check_out_lng);
     });
     return [...keys].slice(0, 40);
-  }, [addresses, filteredRows, visibleEvents]);
+  }, [addresses, filteredRows, visibleReportRows]);
 
   useEffect(() => {
     if (!addressQueue.length) return;
@@ -993,7 +1011,7 @@ export default function AttendanceApp() {
               <div><p className="eyebrow">รายการล่าสุด</p><h2 id="recent-heading">ประวัติเข้างาน</h2></div>
               <button type="button" onClick={() => setView("history")}>ดูทั้งหมด →</button>
             </div>
-            <HistoryList addresses={addresses} rows={rows.slice(0, 3)} compact />
+            <HistoryList rows={rows.slice(0, 3)} compact />
           </section>
         </section>
       )}
@@ -1009,7 +1027,7 @@ export default function AttendanceApp() {
             <span><small>บันทึกครบ</small><strong>{filteredRows.filter((row) => row.check_out_at).length}</strong></span>
             <span><small>ยังไม่เลิกงาน</small><strong>{filteredRows.filter((row) => !row.check_out_at).length}</strong></span>
           </div>
-          <HistoryList addresses={addresses} rows={filteredRows} showNames={Boolean(canViewAll)} />
+          <AttendanceTable rows={filteredRows} addresses={addresses} showNames={Boolean(canViewAll)} />
         </section>
       )}
 
@@ -1133,31 +1151,7 @@ export default function AttendanceApp() {
               <div><p className="eyebrow">ATTENDANCE DETAILS</p><h2 id="report-detail-heading">รายละเอียดการลงเวลา</h2></div>
               <span>หน้า {safeReportPage} / {reportPageCount} · {filteredReportRows.length.toLocaleString("th-TH")} รายการ</span>
             </div>
-            {visibleEvents.length ? (
-              <div className="report-table-scroll">
-                <table className="report-table">
-                  <thead><tr><th>รูป</th><th>ชื่อ</th><th>ประเภท</th><th>เวลา</th><th>สถานที่</th><th>พิกัด</th></tr></thead>
-                  <tbody>{visibleEvents.map((event) => {
-                    const address = addresses[pointKey(event.lat, event.lng)];
-                    return (
-                      <tr key={event.key}>
-                        <td><PhotoThumbnail url={event.photoUrl} alt={`${event.kind === "in" ? "รูปเข้างาน" : "รูปเลิกงาน"} ${event.record.name}`} caption="ดูรูปเต็ม ↗" variant="table" /></td>
-                        <td className="cell-name"><strong>{event.record.name}</strong><small>@{event.record.username}</small></td>
-                        <td><span className={`type-badge ${event.kind}`}>{event.kind === "in" ? "เข้างาน" : "เลิกงาน"}</span></td>
-                        <td className="cell-time">{formatDate(event.record.work_date)} {formatTime(event.at)}</td>
-                        <td className="cell-address">
-                          <a href={mapUrl(event.lat, event.lng)} target="_blank" rel="noreferrer">
-                            {address || `${event.lat.toFixed(6)}, ${event.lng.toFixed(6)}`}
-                          </a>
-                          {address ? null : <small className="address-pending">กำลังค้นหาที่อยู่…</small>}
-                        </td>
-                        <td><MapThumbnail lat={event.lat} lng={event.lng} label={event.kind === "in" ? "จุดเข้างาน" : "จุดเลิกงาน"} variant="table" /></td>
-                      </tr>
-                    );
-                  })}</tbody>
-                </table>
-              </div>
-            ) : <div className="empty-state"><span>○</span><h3>ไม่พบข้อมูลรายงาน</h3><p>ลองเปลี่ยนช่วงวันที่หรือเงื่อนไขตัวกรอง</p></div>}
+            <AttendanceTable rows={visibleReportRows} addresses={addresses} showNames />
             {reportPageCount > 1 && <div className="report-pagination"><button type="button" disabled={safeReportPage <= 1} onClick={() => setReportPage((page) => Math.max(1, page - 1))}>← ก่อนหน้า</button><span>{((safeReportPage - 1) * REPORT_PAGE_SIZE) + 1}–{Math.min(safeReportPage * REPORT_PAGE_SIZE, filteredReportRows.length)} จาก {filteredReportRows.length}</span><button type="button" disabled={safeReportPage >= reportPageCount} onClick={() => setReportPage((page) => Math.min(reportPageCount, page + 1))}>ถัดไป →</button></div>}
           </section>
         </section>
@@ -1268,18 +1262,74 @@ function PhotoThumbnail({ url, alt, caption, variant = "card" }: { url: string; 
 }
 
 /** หลักฐาน 1 ชุด = รูปที่ถ่ายไว้ + แผนที่จุดที่บันทึก วางคู่กันในขนาดเท่ากัน */
-function EvidencePair({ title, photoUrl, owner, accuracy, lat, lng, address, variant = "card" }: {
-  title: string; photoUrl: string; owner: string; accuracy: number | null; lat: number; lng: number; address?: string; variant?: keyof typeof MAP_SIZES;
-}) {
+function PlaceCell({ lat, lng, addresses }: { lat: number; lng: number; addresses: Record<string, string> }) {
+  const full = plusCode(lat, lng);
+  const locality = localityOf(addresses[pointKey(lat, lng)]);
   return (
-    <section className="evidence-pair">
-      <h4>{title}{accuracy ? <small>GPS ±{Math.round(accuracy)} ม.</small> : null}</h4>
-      <div className="evidence-pair-body">
-        <PhotoThumbnail url={photoUrl} alt={`${title} ${owner}`} caption="ดูรูปเต็ม ↗" variant={variant} />
-        <MapThumbnail lat={lat} lng={lng} label={title} variant={variant} />
-      </div>
-      <p className="evidence-address">{address || `${lat.toFixed(6)}, ${lng.toFixed(6)}`}</p>
-    </section>
+    <>
+      <a href={mapUrl(lat, lng)} target="_blank" rel="noreferrer" title={full}>{shortPlusCode(full)}</a>
+      {locality ? <small className="place-locality">{locality}</small> : null}
+    </>
+  );
+}
+
+function EvidenceCell({ photoUrl, owner, lat, lng, label }: { photoUrl: string; owner: string; lat: number; lng: number; label: string }) {
+  return (
+    <div className="evidence-cell">
+      <PhotoThumbnail url={photoUrl} alt={`${label} ${owner}`} caption="ดูรูปเต็ม ↗" variant="table" />
+      <MapThumbnail lat={lat} lng={lng} label={label} variant="table" />
+    </div>
+  );
+}
+
+/** ตารางเดียวใช้ทั้งหน้าประวัติและหน้ารายงาน — เข้างานกับเลิกงานอยู่แถวเดียวกัน */
+function AttendanceTable({ rows, addresses, showNames = false }: { rows: Attendance[]; addresses: Record<string, string>; showNames?: boolean }) {
+  if (!rows.length) return <div className="empty-state"><span>○</span><h3>ไม่พบข้อมูล</h3><p>ลองเปลี่ยนช่วงวันที่หรือเงื่อนไขตัวกรอง</p></div>;
+
+  return (
+    <div className="report-table-scroll">
+      <table className="report-table attendance-table">
+        <thead>
+          <tr>
+            <th>วันที่</th>
+            {showNames ? <th>พนักงาน</th> : null}
+            <th>เข้างาน</th>
+            <th>หลักฐานเข้างาน</th>
+            <th>สถานที่เข้างาน</th>
+            <th>เลิกงาน</th>
+            <th>หลักฐานเลิกงาน</th>
+            <th>สถานที่เลิกงาน</th>
+            <th>ชั่วโมง</th>
+            <th>สถานะ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((record) => {
+            const closed = Boolean(record.check_out_at && record.check_out_lat !== null && record.check_out_lng !== null);
+            return (
+              <tr key={record.id}>
+                <td className="cell-time"><strong>{formatDate(record.work_date)}</strong></td>
+                {showNames ? <td className="cell-name"><strong>{record.name}</strong><small>@{record.username}</small></td> : null}
+                <td className="cell-time"><span className="type-badge in">เข้างาน</span><small>{formatTime(record.check_in_at)}</small></td>
+                <td><EvidenceCell photoUrl={record.check_in_photo_url} owner={record.name} lat={record.check_in_lat} lng={record.check_in_lng} label="จุดเข้างาน" /></td>
+                <td className="cell-address"><PlaceCell lat={record.check_in_lat} lng={record.check_in_lng} addresses={addresses} /></td>
+                {closed ? (
+                  <>
+                    <td className="cell-time"><span className="type-badge out">เลิกงาน</span><small>{formatTime(record.check_out_at)}</small></td>
+                    <td><EvidenceCell photoUrl={record.check_out_photo_url || ""} owner={record.name} lat={record.check_out_lat as number} lng={record.check_out_lng as number} label="จุดเลิกงาน" /></td>
+                    <td className="cell-address"><PlaceCell lat={record.check_out_lat as number} lng={record.check_out_lng as number} addresses={addresses} /></td>
+                  </>
+                ) : (
+                  <td className="cell-waiting" colSpan={3}>ยังไม่เลิกงาน</td>
+                )}
+                <td className="cell-time">{formatHours(workHours(record))}</td>
+                <td><span className={`complete-badge ${closed ? "complete" : "pending"}`}>{closed ? "ครบถ้วน" : "กำลังทำงาน"}</span></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1321,7 +1371,7 @@ function GoogleMapEmbed({ lat, lng, label }: { lat: number; lng: number; label: 
   );
 }
 
-function HistoryList({ rows, compact = false, showNames = false, addresses = {} }: { rows: Attendance[]; compact?: boolean; showNames?: boolean; addresses?: Record<string, string> }) {
+function HistoryList({ rows, compact = false, showNames = false }: { rows: Attendance[]; compact?: boolean; showNames?: boolean }) {
   if (!rows.length) return <div className="empty-state"><span>○</span><h3>ยังไม่มีประวัติ</h3><p>เมื่อบันทึกเข้างาน รายการจะปรากฏที่นี่</p></div>;
   return (
     <div className={`history-list ${compact ? "compact" : "detailed"}`}>
@@ -1336,14 +1386,6 @@ function HistoryList({ rows, compact = false, showNames = false, addresses = {} 
             </div>
           </div>
           <span className={`complete-badge ${record.check_out_at ? "complete" : "pending"}`}>{record.check_out_at ? "ครบถ้วน" : "กำลังทำงาน"}</span>
-          {!compact && (
-            <div className="evidence-grid">
-              <EvidencePair title="เข้างาน" photoUrl={record.check_in_photo_url} owner={record.name} accuracy={record.check_in_accuracy} lat={record.check_in_lat} lng={record.check_in_lng} address={addresses[pointKey(record.check_in_lat, record.check_in_lng)]} />
-              {record.check_out_photo_url && record.check_out_lat !== null && record.check_out_lng !== null
-                ? <EvidencePair title="เลิกงาน" photoUrl={record.check_out_photo_url} owner={record.name} accuracy={record.check_out_accuracy} lat={record.check_out_lat} lng={record.check_out_lng} address={addresses[pointKey(record.check_out_lat, record.check_out_lng)]} />
-                : <div className="waiting-evidence">รอบันทึกเลิกงาน</div>}
-            </div>
-          )}
         </article>
       ))}
     </div>
