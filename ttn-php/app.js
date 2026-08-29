@@ -129,13 +129,9 @@ function mapThumbMarkup(latValue, lngValue, label = "ดูแผนที่", 
   const safeLat = lat.toFixed(6);
   const safeLng = lng.toFixed(6);
   const size = MAP_SIZES[variant] || MAP_SIZES.card;
-  const google = state.mapProvider === "google";
-  const href = google
-    ? `https://www.google.com/maps?q=${safeLat},${safeLng}`
-    : `https://www.openstreetmap.org/?mlat=${safeLat}&mlon=${safeLng}#map=16/${safeLat}/${safeLng}`;
   return `<div class="map-thumb" data-lat="${safeLat}" data-lng="${safeLng}" data-w="${size.w}" data-h="${size.h}" style="--map-w:${size.w}px;--map-h:${size.h}px">
     <div class="map-frame"><span class="map-placeholder"><b>●</b> กำลังโหลดแผนที่</span></div>
-    <a href="${href}" target="_blank" rel="noreferrer">${escapeHtml(label)} · ${google ? "Google Maps" : "OpenStreetMap"} ↗</a>
+    <a href="https://www.google.com/maps?q=${safeLat},${safeLng}" target="_blank" rel="noreferrer">${escapeHtml(label)} · เปิดแผนที่เต็มจอ ↗</a>
   </div>`;
 }
 
@@ -159,13 +155,12 @@ function loadMapThumbnail(element) {
     image.src = `/api/map?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}&w=${width}&h=${height}`;
     frame.replaceChildren(image);
   } else {
-    const margin = 0.004;
-    const bbox = `${lng - margin},${lat - margin},${lng + margin},${lat + margin}`;
+    // แผนที่ฝังของ Google — ไม่ต้องใช้ API key จึงใช้ได้ทันทีแม้ยังไม่ได้ตั้ง GOOGLE_MAPS_API_KEY
     const iframe = document.createElement("iframe");
     iframe.loading = "lazy";
     iframe.title = "แผนที่ตำแหน่งโดยประมาณ";
-    iframe.referrerPolicy = "no-referrer";
-    iframe.src = `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik&marker=${encodeURIComponent(`${lat},${lng}`)}`;
+    iframe.referrerPolicy = "no-referrer-when-downgrade";
+    iframe.src = `https://maps.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}&z=16&output=embed`;
     frame.replaceChildren(iframe);
   }
   element.dataset.ready = "true";

@@ -26,11 +26,11 @@ test("ships T TIME metadata and removes the starter preview", async () => {
   assert.match(client, /attendanceDate/);
   assert.match(client, /รายงานเวลาทำงาน/);
   assert.match(client, /MapThumbnail/);
-  assert.match(client, /tile\.openstreetmap\.org/);
+  assert.match(client, /maps\.google\.com\/maps\?q=/);
+  assert.match(client, /output=embed/);
   assert.match(client, /\/api\/map\?lat=/);
   assert.match(client, /formatWeekdayDate/);
   assert.doesNotMatch(client, /จัดการเวลา/);
-  assert.match(client, /OpenStreetMap/);
   assert.match(backend, /function ttnWorkDate_/);
   assert.match(backend, /work_date: ttnWorkDate_/);
   assert.match(backend, /Math\.min\(5000/);

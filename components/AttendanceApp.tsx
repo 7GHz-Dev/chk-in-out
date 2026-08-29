@@ -208,27 +208,6 @@ function formatHours(value: number | null) {
   return value === null ? "—" : `${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ชม.`;
 }
 
-// ไทล์จริงกว้าง 256px แต่วาดที่ 360px ทั้งบล็อก (ขยายเท่ากันทุกด้าน ภาพจึงไม่ผิดสัดส่วน)
-// บล็อก 2x2 = 720px จึงเหลือแผนที่รอบจุดอย่างน้อย 180px ทุกด้าน ครอบคลุมกรอบใหญ่สุดที่ใช้อยู่
-const OSM_TILE_SIZE = 360;
-
-function osmMiniMap(lat: number, lng: number, zoom = 15) {
-  const safeLat = Math.max(-85.0511, Math.min(85.0511, lat));
-  const scale = 2 ** zoom;
-  const x = ((lng + 180) / 360) * scale;
-  const sin = Math.sin((safeLat * Math.PI) / 180);
-  const y = (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale;
-  const originX = Math.round(x) - 1;
-  const originY = Math.min(Math.max(Math.round(y) - 1, 0), scale - 2);
-  const tiles = [0, 1].flatMap((row) => [0, 1].map((column) => ({
-    key: `${row}-${column}`,
-    src: `https://tile.openstreetmap.org/${zoom}/${(((originX + column) % scale) + scale) % scale}/${originY + row}.png`,
-    left: column * OSM_TILE_SIZE,
-    top: row * OSM_TILE_SIZE,
-  })));
-  return { tiles, offsetX: (x - originX) * OSM_TILE_SIZE, offsetY: (y - originY) * OSM_TILE_SIZE };
-}
-
 async function loadPhotoSource(file: File) {
   if ("createImageBitmap" in window) {
     try {
@@ -882,15 +861,13 @@ export default function AttendanceApp() {
 function MapThumbnail({ lat, lng, label, variant = "card" }: { lat: number; lng: number; label: string; variant?: keyof typeof MAP_SIZES }) {
   const provider = useContext(MapProviderContext);
   const { width, height } = MAP_SIZES[variant];
-  const frame = { width, maxWidth: "100%" } satisfies CSSProperties;
 
   return (
-    <div className="map-thumbnail" style={frame}>
-      <a className="map-thumbnail-canvas" style={{ height }} href={mapUrl(lat, lng)} target="_blank" rel="noreferrer" aria-label={`${label} เปิดใน Google Maps`}>
-        {provider === "google" ? <GoogleMapImage lat={lat} lng={lng} label={label} width={width} height={height} /> : <OsmMapTiles lat={lat} lng={lng} />}
-        <span className="map-thumbnail-label">{label} ↗</span>
-      </a>
-      {provider === "google" ? null : <small>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a></small>}
+    <div className="map-thumbnail" style={{ width, maxWidth: "100%" } satisfies CSSProperties}>
+      <div className="map-thumbnail-canvas" style={{ height }}>
+        {provider === "google" ? <GoogleMapImage lat={lat} lng={lng} label={label} width={width} height={height} /> : <GoogleMapEmbed lat={lat} lng={lng} label={label} />}
+      </div>
+      <a className="map-thumbnail-link" href={mapUrl(lat, lng)} target="_blank" rel="noreferrer">{label} · เปิดแผนที่เต็มจอ ↗</a>
     </div>
   );
 }
@@ -902,18 +879,20 @@ function GoogleMapImage({ lat, lng, label, width, height }: { lat: number; lng: 
   return <img className="map-thumbnail-photo" src={source} alt={`แผนที่บริเวณ${label}`} width={width} height={height} loading="lazy" />;
 }
 
-function OsmMapTiles({ lat, lng }: { lat: number; lng: number }) {
-  const map = osmMiniMap(lat, lng);
+/**
+ * แผนที่ฝังของ Google — ไม่ต้องใช้ API key จึงใช้ได้ทันที
+ * (จะเปลี่ยนเป็นภาพนิ่งจาก /api/map อัตโนมัติเมื่อมี GOOGLE_MAPS_API_KEY ซึ่งเบากว่าเพราะเป็นรูปใบเดียว)
+ */
+function GoogleMapEmbed({ lat, lng, label }: { lat: number; lng: number; label: string }) {
+  const source = `https://maps.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}&z=16&output=embed`;
   return (
-    <>
-      <span className="map-thumbnail-tiles" style={{ left: `calc(50% - ${map.offsetX}px)`, top: `calc(50% - ${map.offsetY}px)` }} aria-hidden="true">
-        {map.tiles.map((tile) => (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img key={tile.key} src={tile.src} alt="" loading="lazy" referrerPolicy="strict-origin-when-cross-origin" style={{ left: tile.left, top: tile.top }} />
-        ))}
-      </span>
-      <i className="map-thumbnail-pin" aria-hidden="true" />
-    </>
+    <iframe
+      className="map-thumbnail-frame"
+      src={source}
+      title={`แผนที่บริเวณ${label}`}
+      loading="lazy"
+      referrerPolicy="no-referrer-when-downgrade"
+    />
   );
 }
 
