@@ -3,12 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("ships T TIME metadata and removes the starter preview", async () => {
-  const [page, layout, client, backend, report] = await Promise.all([
+  const [page, layout, client, backend, report, workConfig] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/AttendanceApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8"),
     readFile(new URL("../app/api/report/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/work-config/route.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /AttendanceApp/);
@@ -30,10 +31,19 @@ test("ships T TIME metadata and removes the starter preview", async () => {
   assert.match(client, /output=embed/);
   assert.match(client, /\/api\/map\?lat=/);
   assert.match(client, /formatWeekdayDate/);
+  assert.match(client, /EvidencePair/);
+  assert.match(client, /PhotoThumbnail/);
+  assert.match(client, /dashboard-kpis/);
+  assert.match(client, /payroll-row/);
+  assert.match(client, /\/api\/work-config/);
   assert.doesNotMatch(client, /จัดการเวลา/);
   assert.match(backend, /function ttnWorkDate_/);
   assert.match(backend, /work_date: ttnWorkDate_/);
   assert.match(backend, /Math\.min\(5000/);
+  assert.match(backend, /function ttnWorkConfig_/);
+  assert.match(backend, /function ttnSavePayroll_/);
+  assert.match(workConfig, /user\.role !== "admin" && user\.role !== "hr"/);
+  assert.match(workConfig, /backendReady/);
   assert.match(report, /user\.role !== "admin" && user\.role !== "hr"/);
   assert.match(report, /limit: MAX_REPORT_ROWS/);
   assert.match(report, /addWorksheet\("สรุปรายงาน"/);

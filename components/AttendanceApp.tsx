@@ -26,7 +26,7 @@ type Attendance = {
 };
 
 type ApiResponse = Record<string, unknown> & { ok?: boolean; error?: string };
-type View = "today" | "history" | "report" | "users";
+type View = "today" | "history" | "dashboard" | "report" | "users" | "settings";
 type LocationHelp = { href: string | null; instructions: string };
 type ReportStatus = "all" | "complete" | "open";
 
@@ -35,11 +35,21 @@ const REPORT_PAGE_SIZE = 25;
 type MapProvider = "google" | "osm";
 const MapProviderContext = createContext<MapProvider>("osm");
 
-// ขนาดภาพแผนที่ (พิกเซล) — ส่งให้ Static Maps ตรง ๆ และใช้กำหนดกรอบใน CSS ด้วย
+// ขนาดกรอบหลักฐาน (พิกเซล) — ใช้ทั้งแผนที่และรูปถ่ายให้เท่ากันพอดี และส่งให้ Static Maps ตรง ๆ
 const MAP_SIZES = {
-  card: { width: 320, height: 190 },
-  table: { width: 244, height: 152 },
+  card: { width: 160, height: 95 },
+  table: { width: 122, height: 76 },
 } as const;
+
+type WorkSettings = { work_start: string; work_end: string; late_grace_minutes: string };
+type PayrollEntry = { user_id: string; salary: number; trip_rate: number; deduction: number; note: string; updated_at: string };
+type WorkConfig = { settings: WorkSettings; payroll: PayrollEntry[]; backendReady: boolean };
+
+const DEFAULT_WORK_CONFIG: WorkConfig = {
+  settings: { work_start: "08:30", work_end: "17:30", late_grace_minutes: "10" },
+  payroll: [],
+  backendReady: true,
+};
 
 const roleLabels: Record<Role, string> = {
   user: "ผู้ใช้งาน",
@@ -202,6 +212,33 @@ function workHours(record: Attendance) {
   const end = new Date(record.check_out_at).getTime();
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
   return (end - start) / 3_600_000;
+}
+
+function hhmmToMinutes(value: string) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+/** นาทีของวันตามเวลาไทย — ใช้เทียบกับเวลาเริ่มงานที่ผู้ดูแลตั้งไว้ */
+function bangkokMinutesOfDay(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : null;
+}
+
+function formatBaht(value: number) {
+  return value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function currentMonthKey() {
+  const { year, month } = bangkokDateParts();
+  return `${year}-${month}`;
 }
 
 function formatHours(value: number | null) {
@@ -370,6 +407,8 @@ export default function AttendanceApp() {
   const [reportQuery, setReportQuery] = useState("");
   const [reportPage, setReportPage] = useState(1);
   const [mapProvider, setMapProvider] = useState<MapProvider>("osm");
+  const [workConfig, setWorkConfig] = useState<WorkConfig | null>(null);
+  const [dashboardMonth, setDashboardMonth] = useState(() => currentMonthKey());
   const fileInput = useRef<HTMLInputElement>(null);
   const locationRequest = useRef<Promise<LocationData> | null>(null);
   const allowLineGps = useRef(false);
@@ -387,6 +426,15 @@ export default function AttendanceApp() {
   const loadUsers = useCallback(async () => {
     const data = await api("/api/users");
     setManagedUsers((data.users || []) as ManagedUser[]);
+  }, []);
+
+  const loadWorkConfig = useCallback(async () => {
+    const data = await api("/api/work-config");
+    setWorkConfig({
+      settings: (data.settings || DEFAULT_WORK_CONFIG.settings) as WorkSettings,
+      payroll: (data.payroll || []) as PayrollEntry[],
+      backendReady: data.backendReady !== false,
+    });
   }, []);
 
   const loadReportRows = useCallback(async () => {
@@ -530,6 +578,81 @@ export default function AttendanceApp() {
     }
   }
 
+  async function openSettings() {
+    setView("settings");
+    try {
+      await Promise.all([loadUsers(), loadWorkConfig()]);
+    } catch (caught) {
+      setMessage({ type: "error", text: thaiError(caught) });
+    }
+  }
+
+  async function openDashboard() {
+    setView("dashboard");
+    setReportLoading(true);
+    try {
+      await Promise.all([reportSource ? Promise.resolve() : loadReportRows(), loadWorkConfig()]);
+    } catch (caught) {
+      setMessage({ type: "error", text: thaiError(caught) });
+    } finally {
+      setReportLoading(false);
+    }
+  }
+
+  async function saveWorkSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    const fields = new FormData(event.currentTarget);
+    try {
+      const data = await api("/api/work-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings: {
+            work_start: fields.get("work_start"),
+            work_end: fields.get("work_end"),
+            late_grace_minutes: fields.get("late_grace_minutes"),
+          },
+        }),
+      });
+      setWorkConfig({ settings: data.settings as WorkSettings, payroll: (data.payroll || []) as PayrollEntry[], backendReady: true });
+      setMessage({ type: "success", text: "บันทึกเวลาทำงานเรียบร้อย" });
+    } catch (caught) {
+      setMessage({ type: "error", text: thaiError(caught) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePayroll(event: FormEvent<HTMLFormElement>, member: ManagedUser) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    const fields = new FormData(event.currentTarget);
+    try {
+      const data = await api("/api/work-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payroll: {
+            user_id: member.id,
+            salary: Number(fields.get("salary") || 0),
+            trip_rate: Number(fields.get("trip_rate") || 0),
+            deduction: Number(fields.get("deduction") || 0),
+            note: fields.get("note"),
+          },
+        }),
+      });
+      setWorkConfig({ settings: data.settings as WorkSettings, payroll: (data.payroll || []) as PayrollEntry[], backendReady: true });
+      setMessage({ type: "success", text: `บันทึกค่าจ้างของ ${member.name} เรียบร้อย` });
+    } catch (caught) {
+      setMessage({ type: "error", text: thaiError(caught) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function openReport() {
     setView("report");
     if (reportSource || reportLoading) return;
@@ -611,6 +734,77 @@ export default function AttendanceApp() {
   const reportPageCount = Math.max(1, Math.ceil(filteredReportRows.length / REPORT_PAGE_SIZE));
   const safeReportPage = Math.min(reportPage, reportPageCount);
   const visibleReportRows = filteredReportRows.slice((safeReportPage - 1) * REPORT_PAGE_SIZE, safeReportPage * REPORT_PAGE_SIZE);
+  const dashboard = useMemo(() => {
+    const settings = workConfig?.settings || DEFAULT_WORK_CONFIG.settings;
+    const startMinutes = hhmmToMinutes(settings.work_start) ?? 510;
+    const grace = Number(settings.late_grace_minutes) || 0;
+    const payrollByUser = new Map((workConfig?.payroll || []).map((entry) => [entry.user_id, entry]));
+    const source = reportSource || rows;
+    const monthRows = source.filter((record) => String(record.work_date || "").startsWith(dashboardMonth));
+    const parts = bangkokDateParts();
+    const todayKey = `${parts.year}-${parts.month}-${parts.day}`;
+    const todayRows = source.filter((record) => record.work_date === todayKey);
+    const late = (record: Attendance) => {
+      const minutes = bangkokMinutesOfDay(record.check_in_at);
+      return minutes !== null && minutes > startMinutes + grace;
+    };
+
+    const people = new Map<string, {
+      key: string; name: string; role: Role; days: Set<string>; hours: number; late: number; open: number;
+      salary: number; tripRate: number; deduction: number;
+    }>();
+    monthRows.forEach((record) => {
+      const key = record.user_id || record.username;
+      const entry = people.get(key) || {
+        key,
+        name: record.name,
+        role: record.role,
+        days: new Set<string>(),
+        hours: 0,
+        late: 0,
+        open: 0,
+        salary: payrollByUser.get(key)?.salary || 0,
+        tripRate: payrollByUser.get(key)?.trip_rate || 0,
+        deduction: payrollByUser.get(key)?.deduction || 0,
+      };
+      entry.days.add(record.work_date);
+      entry.hours += workHours(record) || 0;
+      if (late(record)) entry.late += 1;
+      if (!record.check_out_at) entry.open += 1;
+      people.set(key, entry);
+    });
+
+    const employees = [...people.values()].map((entry) => ({
+      ...entry,
+      dayCount: entry.days.size,
+      pay: Math.max(0, entry.salary + entry.tripRate * entry.days.size - entry.deduction),
+    })).sort((left, right) => right.hours - left.hours || left.name.localeCompare(right.name, "th"));
+
+    const hoursByDate = new Map<string, number>();
+    monthRows.forEach((record) => {
+      hoursByDate.set(record.work_date, (hoursByDate.get(record.work_date) || 0) + (workHours(record) || 0));
+    });
+    const trend = [...hoursByDate.entries()].sort((left, right) => left[0].localeCompare(right[0])).slice(-14)
+      .map(([date, hours]) => ({ date, hours: Math.round(hours * 100) / 100 }));
+    const peakHours = trend.reduce((top, point) => Math.max(top, point.hours), 0);
+
+    const monthHours = monthRows.reduce((total, record) => total + (workHours(record) || 0), 0);
+    return {
+      settings,
+      employees,
+      trend,
+      peakHours,
+      monthRecords: monthRows.length,
+      monthHours,
+      monthLate: monthRows.filter(late).length,
+      monthOpen: monthRows.filter((record) => !record.check_out_at).length,
+      todayPresent: new Set(todayRows.map((record) => record.user_id || record.username)).size,
+      todayLate: todayRows.filter(late).length,
+      todayOpen: todayRows.filter((record) => !record.check_out_at).length,
+      payTotal: employees.reduce((total, entry) => total + entry.pay, 0),
+    };
+  }, [dashboardMonth, reportSource, rows, workConfig]);
+
   const reportDownloadUrl = useMemo(() => {
     const params = new URLSearchParams();
     if (reportFrom) params.set("from", reportFrom);
@@ -636,8 +830,10 @@ export default function AttendanceApp() {
         <nav className="desktop-nav" aria-label="เมนูหลัก">
           <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}>วันนี้</button>
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>ประวัติ</button>
+          {(user.role === "admin" || user.role === "hr") && <button className={view === "dashboard" ? "active" : ""} onClick={() => void openDashboard()}>แดชบอร์ด</button>}
           {(user.role === "admin" || user.role === "hr") && <button className={view === "report" ? "active" : ""} onClick={() => void openReport()}>รายงาน</button>}
           {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}>ผู้ใช้งาน</button>}
+          {user.role === "admin" && <button className={view === "settings" ? "active" : ""} onClick={() => void openSettings()}>ตั้งค่า</button>}
         </nav>
         <div className="profile-menu">
           <span className="avatar">{user.name.trim().charAt(0)}</span>
@@ -749,6 +945,80 @@ export default function AttendanceApp() {
         </section>
       )}
 
+      {view === "dashboard" && (user.role === "admin" || user.role === "hr") && (
+        <section className="content-page dashboard-page">
+          <div className="content-heading report-heading">
+            <div><p className="eyebrow">HR DASHBOARD</p><h1>ภาพรวมองค์กร</h1><p>สรุปการเข้างาน ความตรงต่อเวลา และประมาณการค่าจ้างของเดือนที่เลือก</p></div>
+            <label className="dashboard-month">เดือน<input type="month" value={dashboardMonth} onChange={(event) => setDashboardMonth(event.target.value)} /></label>
+          </div>
+
+          {workConfig && !workConfig.backendReady && (
+            <p className="dashboard-notice">ยังไม่ได้อัปเดตสคริปต์หลังบ้าน (Apps Script) — เวลาเริ่มงานและค่าจ้างจึงใช้ค่าตั้งต้นไปก่อน</p>
+          )}
+          {reportLoading && <div className="report-loading"><span className="loading-bar" /><p>กำลังโหลดข้อมูลทั้งองค์กร…</p></div>}
+
+          <div className="dashboard-kpis">
+            <article className="kpi-lead"><small>เข้างานวันนี้</small><strong>{dashboard.todayPresent.toLocaleString("th-TH")}</strong><span>คนที่ลงเวลาแล้ว</span></article>
+            <article className="kpi-warn"><small>มาสายวันนี้</small><strong>{dashboard.todayLate.toLocaleString("th-TH")}</strong><span>หลัง {dashboard.settings.work_start} + {dashboard.settings.late_grace_minutes} นาที</span></article>
+            <article className="kpi-warn"><small>ยังไม่เลิกงานวันนี้</small><strong>{dashboard.todayOpen.toLocaleString("th-TH")}</strong><span>รายการที่ยังค้าง</span></article>
+            <article><small>ชั่วโมงรวมเดือนนี้</small><strong>{dashboard.monthHours.toLocaleString("th-TH", { maximumFractionDigits: 1 })}</strong><span>ชั่วโมง</span></article>
+            <article><small>รายการลงเวลาเดือนนี้</small><strong>{dashboard.monthRecords.toLocaleString("th-TH")}</strong><span>มาสายรวม {dashboard.monthLate.toLocaleString("th-TH")} ครั้ง</span></article>
+            <article className="kpi-pay"><small>ประมาณการค่าจ้างเดือนนี้</small><strong>{formatBaht(dashboard.payTotal)}</strong><span>บาท (เงินเดือน + ค่าเที่ยว − ยอดหัก)</span></article>
+          </div>
+
+          <section className="dashboard-card">
+            <div className="report-section-heading">
+              <div><p className="eyebrow">DAILY HOURS</p><h2>ชั่วโมงทำงานรายวัน</h2></div>
+              <span>14 วันล่าสุดที่มีการลงเวลา</span>
+            </div>
+            {dashboard.trend.length ? (
+              <div className="dashboard-chart">
+                {dashboard.trend.map((point) => (
+                  <div className="chart-column" key={point.date}>
+                    <span className="chart-value">{point.hours.toFixed(1)}</span>
+                    <div className="chart-track"><i style={{ height: `${dashboard.peakHours ? Math.max(4, (point.hours / dashboard.peakHours) * 100) : 4}%` }} /></div>
+                    <small>{point.date.slice(8)}</small>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="report-empty-copy">ยังไม่มีการลงเวลาในเดือนนี้</p>}
+          </section>
+
+          <section className="dashboard-card">
+            <div className="report-section-heading">
+              <div><p className="eyebrow">BY EMPLOYEE</p><h2>สรุปรายบุคคล</h2></div>
+              <span>{dashboard.employees.length.toLocaleString("th-TH")} คนที่มีการลงเวลา</span>
+            </div>
+            {dashboard.employees.length ? (
+              <div className="report-table-scroll">
+                <table className="dashboard-table">
+                  <thead><tr><th>พนักงาน</th><th>บทบาท</th><th>วันทำงาน</th><th>ชั่วโมงรวม</th><th>มาสาย</th><th>ค้างเลิกงาน</th><th>เงินเดือน</th><th>ค่าเที่ยว/วัน</th><th>ยอดหัก</th><th>ประมาณการจ่าย</th></tr></thead>
+                  <tbody>{dashboard.employees.map((entry) => (
+                    <tr key={entry.key}>
+                      <td><strong>{entry.name}</strong></td>
+                      <td><span className={`role-badge role-${entry.role}`}>{roleLabels[entry.role]}</span></td>
+                      <td>{entry.dayCount}</td>
+                      <td>{entry.hours.toLocaleString("th-TH", { maximumFractionDigits: 1 })}</td>
+                      <td>{entry.late ? <span className="cell-warn">{entry.late}</span> : "—"}</td>
+                      <td>{entry.open ? <span className="cell-warn">{entry.open}</span> : "—"}</td>
+                      <td>{formatBaht(entry.salary)}</td>
+                      <td>{formatBaht(entry.tripRate)}</td>
+                      <td>{entry.deduction ? formatBaht(entry.deduction) : "—"}</td>
+                      <td><strong>{formatBaht(entry.pay)}</strong></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            ) : <p className="report-empty-copy">ยังไม่มีพนักงานที่ลงเวลาในเดือนนี้</p>}
+          </section>
+
+          <p className="dashboard-foot">
+            เวลาทำงานมาตรฐาน {dashboard.settings.work_start}–{dashboard.settings.work_end} · ผ่อนผันมาสาย {dashboard.settings.late_grace_minutes} นาที
+            {user.role === "admin" ? " · แก้ได้ที่เมนูตั้งค่า" : " · ผู้ดูแลระบบเป็นผู้ตั้งค่า"}
+          </p>
+        </section>
+      )}
+
       {view === "report" && (user.role === "admin" || user.role === "hr") && (
         <section className="content-page report-page">
           <div className="content-heading report-heading">
@@ -798,7 +1068,7 @@ export default function AttendanceApp() {
             {visibleReportRows.length ? (
               <div className="report-table-scroll">
                 <table className="report-table">
-                  <thead><tr><th>วันที่</th><th>พนักงาน</th><th>บทบาท</th><th>เข้างาน</th><th>เลิกงาน</th><th>ชั่วโมง</th><th>สถานะ</th><th>ตำแหน่งโดยประมาณ</th></tr></thead>
+                  <thead><tr><th>วันที่</th><th>พนักงาน</th><th>บทบาท</th><th>เข้างาน</th><th>เลิกงาน</th><th>ชั่วโมง</th><th>สถานะ</th><th>หลักฐานเข้างาน</th><th>หลักฐานเลิกงาน</th></tr></thead>
                   <tbody>{visibleReportRows.map((record) => (
                     <tr key={record.id}>
                       <td><strong>{formatDate(record.work_date)}</strong></td>
@@ -808,7 +1078,10 @@ export default function AttendanceApp() {
                       <td>{formatTime(record.check_out_at)}</td>
                       <td>{formatHours(workHours(record))}</td>
                       <td><span className={`complete-badge ${record.check_out_at ? "complete" : "pending"}`}>{record.check_out_at ? "ครบถ้วน" : "ยังไม่เลิกงาน"}</span></td>
-                      <td><div className="report-map-pair"><MapThumbnail lat={record.check_in_lat} lng={record.check_in_lng} label="จุดเข้างาน" variant="table" />{record.check_out_lat !== null && record.check_out_lng !== null && <MapThumbnail lat={record.check_out_lat} lng={record.check_out_lng} label="จุดเลิกงาน" variant="table" />}</div></td>
+                      <td><EvidencePair title="เข้างาน" photoUrl={record.check_in_photo_url} owner={record.name} accuracy={record.check_in_accuracy} lat={record.check_in_lat} lng={record.check_in_lng} variant="table" /></td>
+                      <td>{record.check_out_photo_url && record.check_out_lat !== null && record.check_out_lng !== null
+                        ? <EvidencePair title="เลิกงาน" photoUrl={record.check_out_photo_url} owner={record.name} accuracy={record.check_out_accuracy} lat={record.check_out_lat} lng={record.check_out_lng} variant="table" />
+                        : <span className="report-pending-cell">ยังไม่เลิกงาน</span>}</td>
                     </tr>
                   ))}</tbody>
                 </table>
@@ -847,14 +1120,94 @@ export default function AttendanceApp() {
         </section>
       )}
 
+      {view === "settings" && user.role === "admin" && (
+        <section className="content-page settings-page">
+          <div className="content-heading">
+            <div><p className="eyebrow">ADMIN SETTINGS</p><h1>ตั้งค่าระบบ</h1><p>กำหนดเวลาทำงานมาตรฐาน และค่าจ้างของพนักงานแต่ละคน</p></div>
+          </div>
+
+          {workConfig && !workConfig.backendReady && (
+            <p className="dashboard-notice">ยังบันทึกไม่ได้จนกว่าจะอัปเดตสคริปต์หลังบ้าน (Apps Script) เป็นเวอร์ชันล่าสุด</p>
+          )}
+
+          <form className="settings-card" onSubmit={(event) => void saveWorkSettings(event)}>
+            <h2>เวลาทำงานมาตรฐาน</h2>
+            <p className="settings-lead">ใช้ตัดสินว่าใครมาสาย ทั้งในแดชบอร์ดและรายงาน</p>
+            <div className="settings-grid">
+              <label>เวลาเริ่มงาน<input name="work_start" type="time" defaultValue={workConfig?.settings.work_start || DEFAULT_WORK_CONFIG.settings.work_start} required /></label>
+              <label>เวลาเลิกงาน<input name="work_end" type="time" defaultValue={workConfig?.settings.work_end || DEFAULT_WORK_CONFIG.settings.work_end} required /></label>
+              <label>ผ่อนผันมาสาย (นาที)<input name="late_grace_minutes" type="number" min={0} max={240} step={1} defaultValue={workConfig?.settings.late_grace_minutes || DEFAULT_WORK_CONFIG.settings.late_grace_minutes} required /></label>
+            </div>
+            <button className="submit-button" disabled={busy}>{busy ? "กำลังบันทึก…" : "บันทึกเวลาทำงาน"}</button>
+          </form>
+
+          <section className="settings-card">
+            <h2>ค่าจ้างรายคน</h2>
+            <p className="settings-lead">ประมาณการจ่าย = เงินเดือน + (ค่าเที่ยว × จำนวนวันที่ลงเวลา) − ยอดหัก</p>
+            {managedUsers.length ? (
+              <div className="payroll-list">
+                {managedUsers.map((member) => {
+                  const entry = (workConfig?.payroll || []).find((row) => row.user_id === member.id);
+                  return (
+                    <form className="payroll-row" key={`${member.id}-${entry?.updated_at || "new"}`} onSubmit={(event) => void savePayroll(event, member)}>
+                      <div className="payroll-owner">
+                        <span className="avatar">{member.name.charAt(0)}</span>
+                        <span><strong>{member.name}</strong><small>@{member.username} · {roleLabels[member.role]}</small></span>
+                      </div>
+                      <label>เงินเดือน<input name="salary" type="number" min={0} step="0.01" defaultValue={entry?.salary ?? 0} /></label>
+                      <label>ค่าเที่ยว/วัน<input name="trip_rate" type="number" min={0} step="0.01" defaultValue={entry?.trip_rate ?? 0} /></label>
+                      <label>ยอดหัก<input name="deduction" type="number" min={0} step="0.01" defaultValue={entry?.deduction ?? 0} /></label>
+                      <label className="payroll-note">หมายเหตุ<input name="note" maxLength={300} defaultValue={entry?.note ?? ""} placeholder="เช่น หักประกันสังคม" /></label>
+                      <button type="submit" disabled={busy}>บันทึก</button>
+                    </form>
+                  );
+                })}
+              </div>
+            ) : <p className="report-empty-copy">ยังไม่มีบัญชีพนักงานในระบบ</p>}
+          </section>
+        </section>
+      )}
+
       <nav className="mobile-nav" aria-label="เมนูหลักบนมือถือ">
         <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}><b>●</b><span>วันนี้</span></button>
         <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}><b>≡</b><span>ประวัติ</span></button>
+        {(user.role === "admin" || user.role === "hr") && <button className={view === "dashboard" ? "active" : ""} onClick={() => void openDashboard()}><b>◍</b><span>แดชบอร์ด</span></button>}
         {(user.role === "admin" || user.role === "hr") && <button className={view === "report" ? "active" : ""} onClick={() => void openReport()}><b>▤</b><span>รายงาน</span></button>}
         {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}><b>+</b><span>ผู้ใช้งาน</span></button>}
+        {user.role === "admin" && <button className={view === "settings" ? "active" : ""} onClick={() => void openSettings()}><b>⚙</b><span>ตั้งค่า</span></button>}
       </nav>
     </main>
     </MapProviderContext>
+  );
+}
+
+function PhotoThumbnail({ url, alt, caption, variant = "card" }: { url: string; alt: string; caption: string; variant?: keyof typeof MAP_SIZES }) {
+  const { width, height } = MAP_SIZES[variant];
+  if (!url) return <div className="photo-thumbnail is-empty" style={{ width, height, maxWidth: "100%" } satisfies CSSProperties}>ไม่มีรูป</div>;
+
+  return (
+    <div className="photo-thumbnail" style={{ width, maxWidth: "100%" } satisfies CSSProperties}>
+      <a className="photo-thumbnail-canvas" style={{ height }} href={url} target="_blank" rel="noreferrer">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={alt} loading="lazy" />
+      </a>
+      <span className="photo-thumbnail-link">{caption}</span>
+    </div>
+  );
+}
+
+/** หลักฐาน 1 ชุด = รูปที่ถ่ายไว้ + แผนที่จุดที่บันทึก วางคู่กันในขนาดเท่ากัน */
+function EvidencePair({ title, photoUrl, owner, accuracy, lat, lng, variant = "card" }: {
+  title: string; photoUrl: string; owner: string; accuracy: number | null; lat: number; lng: number; variant?: keyof typeof MAP_SIZES;
+}) {
+  return (
+    <section className="evidence-pair">
+      <h4>{title}{accuracy ? <small>GPS ±{Math.round(accuracy)} ม.</small> : null}</h4>
+      <div className="evidence-pair-body">
+        <PhotoThumbnail url={photoUrl} alt={`${title} ${owner}`} caption="ดูรูปเต็ม ↗" variant={variant} />
+        <MapThumbnail lat={lat} lng={lng} label={title} variant={variant} />
+      </div>
+    </section>
   );
 }
 
@@ -913,22 +1266,10 @@ function HistoryList({ rows, compact = false, showNames = false }: { rows: Atten
           <span className={`complete-badge ${record.check_out_at ? "complete" : "pending"}`}>{record.check_out_at ? "ครบถ้วน" : "กำลังทำงาน"}</span>
           {!compact && (
             <div className="evidence-grid">
-              <a className="evidence" href={record.check_in_photo_url} target="_blank" rel="noreferrer">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={record.check_in_photo_url} alt={`รูปเข้างาน ${record.name}`} loading="lazy" />
-                <span><strong>รูปเข้างาน</strong><small>{record.check_in_accuracy ? `GPS ±${Math.round(record.check_in_accuracy)} ม.` : "GPS"}</small></span>
-              </a>
-              <MapThumbnail lat={record.check_in_lat} lng={record.check_in_lng} label="จุดเข้างาน" />
-              {record.check_out_photo_url && record.check_out_lat !== null && record.check_out_lng !== null ? (
-                <>
-                  <a className="evidence" href={record.check_out_photo_url} target="_blank" rel="noreferrer">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={record.check_out_photo_url} alt={`รูปเลิกงาน ${record.name}`} loading="lazy" />
-                    <span><strong>รูปเลิกงาน</strong><small>{record.check_out_accuracy ? `GPS ±${Math.round(record.check_out_accuracy)} ม.` : "GPS"}</small></span>
-                  </a>
-                  <MapThumbnail lat={record.check_out_lat} lng={record.check_out_lng} label="จุดเลิกงาน" />
-                </>
-              ) : <div className="waiting-evidence">รอบันทึกเลิกงาน</div>}
+              <EvidencePair title="เข้างาน" photoUrl={record.check_in_photo_url} owner={record.name} accuracy={record.check_in_accuracy} lat={record.check_in_lat} lng={record.check_in_lng} />
+              {record.check_out_photo_url && record.check_out_lat !== null && record.check_out_lng !== null
+                ? <EvidencePair title="เลิกงาน" photoUrl={record.check_out_photo_url} owner={record.name} accuracy={record.check_out_accuracy} lat={record.check_out_lat} lng={record.check_out_lng} />
+                : <div className="waiting-evidence">รอบันทึกเลิกงาน</div>}
             </div>
           )}
         </article>

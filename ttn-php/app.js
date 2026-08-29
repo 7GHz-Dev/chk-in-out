@@ -119,7 +119,7 @@ function bangkokDateKey(value = new Date()) {
 }
 
 // ขนาดกรอบแผนที่ (พิกเซล) — ส่งให้ Static Maps ตรง ๆ และใช้กำหนดกรอบผ่านตัวแปร CSS
-const MAP_SIZES = { card: { w: 320, h: 190 }, table: { w: 244, h: 152 } };
+const MAP_SIZES = { card: { w: 160, h: 95 }, table: { w: 122, h: 76 } };
 
 function mapThumbMarkup(latValue, lngValue, label = "ดูแผนที่", variant = "card") {
   if (latValue == null || lngValue == null || latValue === "" || lngValue === "") return `<span class="map-unavailable">ไม่มีข้อมูลตำแหน่ง</span>`;

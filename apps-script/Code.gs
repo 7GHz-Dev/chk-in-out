@@ -4,6 +4,10 @@ const TTN_TIME_ZONE = "Asia/Bangkok";
 const TTN_USER_COLUMNS = 9;
 const TTN_ATTENDANCE_COLUMNS = 19;
 const TTN_ROLES = ["user", "admin", "hr", "employee-driver", "employee-office"];
+const TTN_SETTINGS_COLUMNS = 3;
+const TTN_PAYROLL_COLUMNS = 6;
+// เวลาทำงานและตัวเลขค่าจ้างเก็บเป็นข้อความล้วนในชีต ผู้ดูแลจึงเปิดแก้ในชีตตรง ๆ ได้ด้วย
+const TTN_DEFAULT_SETTINGS = { work_start: "08:30", work_end: "17:30", late_grace_minutes: "10" };
 const TTN_PHP_TOKEN_SHA256 = "a771863998523090291e4a4d65b4af67d12ec548a91f6299042c6df09f8d0380";
 
 function doGet() {
@@ -54,6 +58,9 @@ function ttnDispatch_(action, body) {
     case "recordAttendance": return ttnRecordAttendance_(body);
     case "updateAttendance": return ttnUpdateAttendance_(body);
     case "getPhoto": return ttnGetPhoto_(body);
+    case "getWorkConfig": return ttnWorkConfig_();
+    case "saveWorkSettings": return ttnSaveWorkSettings_(body);
+    case "savePayroll": return ttnSavePayroll_(body);
     default: throw new Error("invalid_action");
   }
 }
@@ -228,6 +235,107 @@ function ttnCreateUser_(input) {
     });
     if (duplicate) throw new Error("username_exists");
     return ttnWriteUser_(sheet, ttnFirstEmptyRow_(sheet), user);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** ชีตตั้งค่า/ค่าจ้างสร้างให้เองตอนเรียกครั้งแรก ผู้ดูแลไม่ต้องไปสร้างเองในสเปรดชีต */
+function ttnSheetOrCreate_(name, headers) {
+  const book = ttnSpreadsheet_();
+  const existing = book.getSheetByName(name);
+  if (existing) return existing;
+  const sheet = book.insertSheet(name);
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight("bold");
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
+function ttnSettingsSheet_() {
+  return ttnSheetOrCreate_("Settings", ["key", "value", "updated_at"]);
+}
+
+function ttnPayrollSheet_() {
+  return ttnSheetOrCreate_("Payroll", ["user_id", "salary", "trip_rate", "deduction", "note", "updated_at"]);
+}
+
+function ttnReadSettings_() {
+  const settings = {};
+  Object.keys(TTN_DEFAULT_SETTINGS).forEach(function (key) { settings[key] = TTN_DEFAULT_SETTINGS[key]; });
+  ttnRows_(ttnSettingsSheet_(), TTN_SETTINGS_COLUMNS).forEach(function (row) {
+    const key = String(row[0] || "").trim();
+    if (key && Object.prototype.hasOwnProperty.call(TTN_DEFAULT_SETTINGS, key)) settings[key] = ttnText_(row[1]).trim();
+  });
+  return settings;
+}
+
+function ttnReadPayroll_() {
+  return ttnRows_(ttnPayrollSheet_(), TTN_PAYROLL_COLUMNS).map(function (row) {
+    const userId = String(row[0] || "").trim();
+    if (!userId) return null;
+    return {
+      user_id: userId,
+      salary: Number(row[1]) || 0,
+      trip_rate: Number(row[2]) || 0,
+      deduction: Number(row[3]) || 0,
+      note: ttnText_(row[4]),
+      updated_at: ttnText_(row[5])
+    };
+  }).filter(Boolean);
+}
+
+function ttnWorkConfig_() {
+  return { settings: ttnReadSettings_(), payroll: ttnReadPayroll_() };
+}
+
+function ttnSaveWorkSettings_(input) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheet = ttnSettingsSheet_();
+    const supplied = input.settings || {};
+    const rows = ttnRows_(sheet, TTN_SETTINGS_COLUMNS);
+    const now = new Date().toISOString();
+    Object.keys(TTN_DEFAULT_SETTINGS).forEach(function (key) {
+      if (!Object.prototype.hasOwnProperty.call(supplied, key)) return;
+      const value = String(supplied[key] === null || supplied[key] === undefined ? "" : supplied[key]).trim();
+      let rowNumber = 0;
+      for (let index = 0; index < rows.length; index += 1) {
+        if (String(rows[index][0] || "").trim() === key) { rowNumber = index + 2; break; }
+      }
+      if (!rowNumber) rowNumber = ttnFirstEmptyRow_(sheet);
+      sheet.getRange(rowNumber, 1, 1, TTN_SETTINGS_COLUMNS).setValues([[key, value, now]]);
+      rows[rowNumber - 2] = [key, value, now];
+    });
+    return ttnWorkConfig_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function ttnSavePayroll_(input) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const entry = input.payroll || {};
+    const userId = String(entry.user_id || "").trim();
+    if (!userId) throw new Error("invalid_payroll_user");
+    const sheet = ttnPayrollSheet_();
+    const rows = ttnRows_(sheet, TTN_PAYROLL_COLUMNS);
+    let rowNumber = 0;
+    for (let index = 0; index < rows.length; index += 1) {
+      if (String(rows[index][0] || "").trim() === userId) { rowNumber = index + 2; break; }
+    }
+    if (!rowNumber) rowNumber = ttnFirstEmptyRow_(sheet);
+    sheet.getRange(rowNumber, 1, 1, TTN_PAYROLL_COLUMNS).setValues([[
+      userId,
+      ttnNumber_(entry.salary, 0, 100000000, "invalid_salary"),
+      ttnNumber_(entry.trip_rate, 0, 1000000, "invalid_trip_rate"),
+      ttnNumber_(entry.deduction, 0, 100000000, "invalid_deduction"),
+      String(entry.note || "").slice(0, 300),
+      new Date().toISOString()
+    ]]);
+    return ttnWorkConfig_();
   } finally {
     lock.releaseLock();
   }
