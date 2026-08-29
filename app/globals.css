@@ -221,7 +221,7 @@ button:disabled { cursor: not-allowed; }
 .report-table-scroll { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: white; }
 .role-summary-table, .report-table { width: 100%; border-collapse: collapse; }
 .role-summary-table { min-width: 700px; }
-.report-table { min-width: 1380px; }
+.report-table { min-width: 1040px; }
 .role-summary-table th, .role-summary-table td, .report-table th, .report-table td { padding: 11px 12px; border-bottom: 1px solid #e8ece7; text-align: left; vertical-align: middle; }
 .role-summary-table th, .report-table th { position: sticky; top: 0; z-index: 1; background: #f2f4f0; color: #596760; font-size: 12px; letter-spacing: .03em; white-space: nowrap; }
 .role-summary-table td { font-size: 14px; }
@@ -231,6 +231,22 @@ button:disabled { cursor: not-allowed; }
 .report-table td > strong, .report-table td > small { display: block; }
 .report-table td > small { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .report-table .role-badge { display: inline-block; max-width: none; white-space: nowrap; }
+/* ตารางรายงานจัดเป็นกริดมีเส้นแบบเดียวกับหน้าแอดมินเดิม: 1 แถว = 1 เหตุการณ์ เข้างาน/เลิกงาน */
+.report-table { background: white; }
+.report-table th, .report-table td { border: 1px solid #e4e8e3; text-align: center; vertical-align: middle; }
+.report-table th { background: #f6f8f5; color: #56635d; font-weight: 800; }
+.report-table td.cell-name { text-align: center; }
+.report-table td.cell-name strong { display: block; font-size: 13px; }
+.report-table td.cell-name small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.report-table td.cell-time { white-space: nowrap; color: #46534d; font-size: 12px; }
+.report-table td.cell-address { min-width: 250px; text-align: left; }
+.report-table td.cell-address a { color: var(--brand-dark); font-weight: 700; line-height: 1.45; }
+.report-table .address-pending { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+.report-table .photo-thumbnail, .report-table .map-thumbnail { margin-inline: auto; }
+.type-badge { display: inline-block; padding: 5px 12px; border-radius: 999px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.type-badge.in { background: #e7f4ed; color: var(--green); }
+.type-badge.out { background: #fdeee0; color: #b26f18; }
+.evidence-address { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .report-empty-copy { margin: 0; padding: 22px; color: var(--muted); text-align: center; font-size: 15px; }
 .report-pagination { padding-top: 16px; display: flex; align-items: center; justify-content: center; gap: 14px; }
 .report-pagination button { min-height: 38px; padding: 0 13px; border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--ink); font-size: 13px; font-weight: 800; }

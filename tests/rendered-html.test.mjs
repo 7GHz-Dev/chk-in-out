@@ -36,6 +36,8 @@ test("ships T TIME metadata and removes the starter preview", async () => {
   assert.match(client, /dashboard-kpis/);
   assert.match(client, /payroll-row/);
   assert.match(client, /\/api\/work-config/);
+  assert.match(client, /\/api\/address\?points=/);
+  assert.match(client, /type-badge/);
   assert.doesNotMatch(client, /จัดการเวลา/);
   assert.match(backend, /function ttnWorkDate_/);
   assert.match(backend, /work_date: ttnWorkDate_/);

@@ -29,6 +29,10 @@ type ApiResponse = Record<string, unknown> & { ok?: boolean; error?: string };
 type View = "today" | "history" | "dashboard" | "report" | "users" | "settings";
 type LocationHelp = { href: string | null; instructions: string };
 type ReportStatus = "all" | "complete" | "open";
+type ReportEvent = {
+  key: string; record: Attendance; kind: "in" | "out"; at: string;
+  photoUrl: string; lat: number; lng: number; accuracy: number | null;
+};
 
 const REPORT_PAGE_SIZE = 25;
 
@@ -37,8 +41,8 @@ const MapProviderContext = createContext<MapProvider>("osm");
 
 // ขนาดกรอบหลักฐาน (พิกเซล) — ใช้ทั้งแผนที่และรูปถ่ายให้เท่ากันพอดี และส่งให้ Static Maps ตรง ๆ
 const MAP_SIZES = {
-  card: { width: 160, height: 95 },
-  table: { width: 122, height: 76 },
+  card: { width: 192, height: 114 },
+  table: { width: 146, height: 91 },
 } as const;
 
 type WorkSettings = { work_start: string; work_end: string; late_grace_minutes: string };
@@ -183,6 +187,10 @@ function formatDay(value: string) {
 function formatMonth(value: string) {
   const date = attendanceDate(value);
   return date ? new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "Asia/Bangkok" }).format(date) : "—";
+}
+
+function pointKey(lat: number, lng: number) {
+  return `${lat.toFixed(4)},${lng.toFixed(4)}`;
 }
 
 function mapUrl(lat: number, lng: number) {
@@ -408,6 +416,7 @@ export default function AttendanceApp() {
   const [reportPage, setReportPage] = useState(1);
   const [mapProvider, setMapProvider] = useState<MapProvider>("osm");
   const [workConfig, setWorkConfig] = useState<WorkConfig | null>(null);
+  const [addresses, setAddresses] = useState<Record<string, string>>({});
   const [dashboardMonth, setDashboardMonth] = useState(() => currentMonthKey());
   const fileInput = useRef<HTMLInputElement>(null);
   const locationRequest = useRef<Promise<LocationData> | null>(null);
@@ -463,6 +472,7 @@ export default function AttendanceApp() {
     const timer = window.setInterval(() => setClock(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
 
   useEffect(() => {
     if (!isLineBrowser() || new URL(window.location.href).searchParams.has("openExternalBrowser")) return;
@@ -805,6 +815,64 @@ export default function AttendanceApp() {
     };
   }, [dashboardMonth, reportSource, rows, workConfig]);
 
+  const visibleEvents = useMemo(() => visibleReportRows.flatMap((record) => {
+    const events: ReportEvent[] = [{
+      key: `${record.id}-in`,
+      record,
+      kind: "in",
+      at: record.check_in_at,
+      photoUrl: record.check_in_photo_url,
+      lat: record.check_in_lat,
+      lng: record.check_in_lng,
+      accuracy: record.check_in_accuracy,
+    }];
+    if (record.check_out_at && record.check_out_lat !== null && record.check_out_lng !== null) {
+      events.push({
+        key: `${record.id}-out`,
+        record,
+        kind: "out",
+        at: record.check_out_at,
+        photoUrl: record.check_out_photo_url || "",
+        lat: record.check_out_lat,
+        lng: record.check_out_lng,
+        accuracy: record.check_out_accuracy,
+      });
+    }
+    return events;
+  }), [visibleReportRows]);
+
+  // ที่อยู่ค้นทีละชุดเฉพาะพิกัดที่ยังไม่รู้จัก — พิกัดซ้ำ (ที่ทำงานเดิม) ใช้คำตอบเดิมได้เลย
+  const addressQueue = useMemo(() => {
+    const keys = new Set<string>();
+    const collect = (lat: number | null, lng: number | null) => {
+      if (lat === null || lng === null || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const key = pointKey(lat, lng);
+      if (!(key in addresses)) keys.add(key);
+    };
+    visibleEvents.forEach((event) => collect(event.lat, event.lng));
+    filteredRows.slice(0, 20).forEach((record) => {
+      collect(record.check_in_lat, record.check_in_lng);
+      collect(record.check_out_lat, record.check_out_lng);
+    });
+    return [...keys].slice(0, 40);
+  }, [addresses, filteredRows, visibleEvents]);
+
+  useEffect(() => {
+    if (!addressQueue.length) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const data = await api(`/api/address?points=${encodeURIComponent(addressQueue.join("|"))}`);
+          if (!cancelled) setAddresses((current) => ({ ...current, ...(data.addresses as Record<string, string>) }));
+        } catch {
+          // ที่อยู่เป็นข้อมูลเสริม ค้นไม่ได้ก็ยังดูพิกัดกับแผนที่ได้ตามปกติ
+        }
+      })();
+    }, 350);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [addressQueue]);
+
   const reportDownloadUrl = useMemo(() => {
     const params = new URLSearchParams();
     if (reportFrom) params.set("from", reportFrom);
@@ -925,7 +993,7 @@ export default function AttendanceApp() {
               <div><p className="eyebrow">รายการล่าสุด</p><h2 id="recent-heading">ประวัติเข้างาน</h2></div>
               <button type="button" onClick={() => setView("history")}>ดูทั้งหมด →</button>
             </div>
-            <HistoryList rows={rows.slice(0, 3)} compact />
+            <HistoryList addresses={addresses} rows={rows.slice(0, 3)} compact />
           </section>
         </section>
       )}
@@ -941,7 +1009,7 @@ export default function AttendanceApp() {
             <span><small>บันทึกครบ</small><strong>{filteredRows.filter((row) => row.check_out_at).length}</strong></span>
             <span><small>ยังไม่เลิกงาน</small><strong>{filteredRows.filter((row) => !row.check_out_at).length}</strong></span>
           </div>
-          <HistoryList rows={filteredRows} showNames={Boolean(canViewAll)} />
+          <HistoryList addresses={addresses} rows={filteredRows} showNames={Boolean(canViewAll)} />
         </section>
       )}
 
@@ -1065,25 +1133,28 @@ export default function AttendanceApp() {
               <div><p className="eyebrow">ATTENDANCE DETAILS</p><h2 id="report-detail-heading">รายละเอียดการลงเวลา</h2></div>
               <span>หน้า {safeReportPage} / {reportPageCount} · {filteredReportRows.length.toLocaleString("th-TH")} รายการ</span>
             </div>
-            {visibleReportRows.length ? (
+            {visibleEvents.length ? (
               <div className="report-table-scroll">
                 <table className="report-table">
-                  <thead><tr><th>วันที่</th><th>พนักงาน</th><th>บทบาท</th><th>เข้างาน</th><th>เลิกงาน</th><th>ชั่วโมง</th><th>สถานะ</th><th>หลักฐานเข้างาน</th><th>หลักฐานเลิกงาน</th></tr></thead>
-                  <tbody>{visibleReportRows.map((record) => (
-                    <tr key={record.id}>
-                      <td><strong>{formatDate(record.work_date)}</strong></td>
-                      <td><strong>{record.name}</strong><small>@{record.username}</small></td>
-                      <td><span className={`role-badge role-${record.role}`}>{roleLabels[record.role]}</span></td>
-                      <td>{formatTime(record.check_in_at)}</td>
-                      <td>{formatTime(record.check_out_at)}</td>
-                      <td>{formatHours(workHours(record))}</td>
-                      <td><span className={`complete-badge ${record.check_out_at ? "complete" : "pending"}`}>{record.check_out_at ? "ครบถ้วน" : "ยังไม่เลิกงาน"}</span></td>
-                      <td><EvidencePair title="เข้างาน" photoUrl={record.check_in_photo_url} owner={record.name} accuracy={record.check_in_accuracy} lat={record.check_in_lat} lng={record.check_in_lng} variant="table" /></td>
-                      <td>{record.check_out_photo_url && record.check_out_lat !== null && record.check_out_lng !== null
-                        ? <EvidencePair title="เลิกงาน" photoUrl={record.check_out_photo_url} owner={record.name} accuracy={record.check_out_accuracy} lat={record.check_out_lat} lng={record.check_out_lng} variant="table" />
-                        : <span className="report-pending-cell">ยังไม่เลิกงาน</span>}</td>
-                    </tr>
-                  ))}</tbody>
+                  <thead><tr><th>รูป</th><th>ชื่อ</th><th>ประเภท</th><th>เวลา</th><th>สถานที่</th><th>พิกัด</th></tr></thead>
+                  <tbody>{visibleEvents.map((event) => {
+                    const address = addresses[pointKey(event.lat, event.lng)];
+                    return (
+                      <tr key={event.key}>
+                        <td><PhotoThumbnail url={event.photoUrl} alt={`${event.kind === "in" ? "รูปเข้างาน" : "รูปเลิกงาน"} ${event.record.name}`} caption="ดูรูปเต็ม ↗" variant="table" /></td>
+                        <td className="cell-name"><strong>{event.record.name}</strong><small>@{event.record.username}</small></td>
+                        <td><span className={`type-badge ${event.kind}`}>{event.kind === "in" ? "เข้างาน" : "เลิกงาน"}</span></td>
+                        <td className="cell-time">{formatDate(event.record.work_date)} {formatTime(event.at)}</td>
+                        <td className="cell-address">
+                          <a href={mapUrl(event.lat, event.lng)} target="_blank" rel="noreferrer">
+                            {address || `${event.lat.toFixed(6)}, ${event.lng.toFixed(6)}`}
+                          </a>
+                          {address ? null : <small className="address-pending">กำลังค้นหาที่อยู่…</small>}
+                        </td>
+                        <td><MapThumbnail lat={event.lat} lng={event.lng} label={event.kind === "in" ? "จุดเข้างาน" : "จุดเลิกงาน"} variant="table" /></td>
+                      </tr>
+                    );
+                  })}</tbody>
                 </table>
               </div>
             ) : <div className="empty-state"><span>○</span><h3>ไม่พบข้อมูลรายงาน</h3><p>ลองเปลี่ยนช่วงวันที่หรือเงื่อนไขตัวกรอง</p></div>}
@@ -1197,8 +1268,8 @@ function PhotoThumbnail({ url, alt, caption, variant = "card" }: { url: string; 
 }
 
 /** หลักฐาน 1 ชุด = รูปที่ถ่ายไว้ + แผนที่จุดที่บันทึก วางคู่กันในขนาดเท่ากัน */
-function EvidencePair({ title, photoUrl, owner, accuracy, lat, lng, variant = "card" }: {
-  title: string; photoUrl: string; owner: string; accuracy: number | null; lat: number; lng: number; variant?: keyof typeof MAP_SIZES;
+function EvidencePair({ title, photoUrl, owner, accuracy, lat, lng, address, variant = "card" }: {
+  title: string; photoUrl: string; owner: string; accuracy: number | null; lat: number; lng: number; address?: string; variant?: keyof typeof MAP_SIZES;
 }) {
   return (
     <section className="evidence-pair">
@@ -1207,6 +1278,7 @@ function EvidencePair({ title, photoUrl, owner, accuracy, lat, lng, variant = "c
         <PhotoThumbnail url={photoUrl} alt={`${title} ${owner}`} caption="ดูรูปเต็ม ↗" variant={variant} />
         <MapThumbnail lat={lat} lng={lng} label={title} variant={variant} />
       </div>
+      <p className="evidence-address">{address || `${lat.toFixed(6)}, ${lng.toFixed(6)}`}</p>
     </section>
   );
 }
@@ -1249,7 +1321,7 @@ function GoogleMapEmbed({ lat, lng, label }: { lat: number; lng: number; label: 
   );
 }
 
-function HistoryList({ rows, compact = false, showNames = false }: { rows: Attendance[]; compact?: boolean; showNames?: boolean }) {
+function HistoryList({ rows, compact = false, showNames = false, addresses = {} }: { rows: Attendance[]; compact?: boolean; showNames?: boolean; addresses?: Record<string, string> }) {
   if (!rows.length) return <div className="empty-state"><span>○</span><h3>ยังไม่มีประวัติ</h3><p>เมื่อบันทึกเข้างาน รายการจะปรากฏที่นี่</p></div>;
   return (
     <div className={`history-list ${compact ? "compact" : "detailed"}`}>
@@ -1266,9 +1338,9 @@ function HistoryList({ rows, compact = false, showNames = false }: { rows: Atten
           <span className={`complete-badge ${record.check_out_at ? "complete" : "pending"}`}>{record.check_out_at ? "ครบถ้วน" : "กำลังทำงาน"}</span>
           {!compact && (
             <div className="evidence-grid">
-              <EvidencePair title="เข้างาน" photoUrl={record.check_in_photo_url} owner={record.name} accuracy={record.check_in_accuracy} lat={record.check_in_lat} lng={record.check_in_lng} />
+              <EvidencePair title="เข้างาน" photoUrl={record.check_in_photo_url} owner={record.name} accuracy={record.check_in_accuracy} lat={record.check_in_lat} lng={record.check_in_lng} address={addresses[pointKey(record.check_in_lat, record.check_in_lng)]} />
               {record.check_out_photo_url && record.check_out_lat !== null && record.check_out_lng !== null
-                ? <EvidencePair title="เลิกงาน" photoUrl={record.check_out_photo_url} owner={record.name} accuracy={record.check_out_accuracy} lat={record.check_out_lat} lng={record.check_out_lng} />
+                ? <EvidencePair title="เลิกงาน" photoUrl={record.check_out_photo_url} owner={record.name} accuracy={record.check_out_accuracy} lat={record.check_out_lat} lng={record.check_out_lng} address={addresses[pointKey(record.check_out_lat, record.check_out_lng)]} />
                 : <div className="waiting-evidence">รอบันทึกเลิกงาน</div>}
             </div>
           )}
