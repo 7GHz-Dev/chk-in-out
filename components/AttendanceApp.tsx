@@ -1268,7 +1268,7 @@ function PlaceCell({ lat, lng, addresses }: { lat: number; lng: number; addresse
   return (
     <>
       <a href={mapUrl(lat, lng)} target="_blank" rel="noreferrer" title={full}>{shortPlusCode(full)}</a>
-      {locality ? <small className="place-locality">{locality}</small> : null}
+      <small className="place-locality">{locality || "กำลังค้นหาตำบล/อำเภอ/จังหวัด…"}</small>
     </>
   );
 }

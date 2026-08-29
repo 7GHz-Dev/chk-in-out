@@ -36,17 +36,65 @@ function parsePoints(raw: string) {
   return points;
 }
 
+type Locality = { tambon: string; amphoe: string; province: string; postcode: string };
+
+const TAMBON_PREFIXES = ["ตำบล", "ตําบล", "แขวง", "ต.", "Tambon", "Khwaeng"];
+const AMPHOE_PREFIXES = ["อำเภอ", "อําเภอ", "เขต", "อ.", "Amphoe", "Khet"];
+
+function firstOf(source: Record<string, string | undefined>, keys: string[]) {
+  for (const key of keys) {
+    const value = String(source[key] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+/** กรุงเทพฯ ใช้ แขวง/เขต ส่วนจังหวัดอื่นใช้ ตำบล/อำเภอ และไม่เติมซ้ำถ้าชื่อมีคำนำหน้าอยู่แล้ว */
+function withPrefix(value: string, prefixes: string[], preferred: string) {
+  if (!value) return "";
+  return prefixes.some((prefix) => value.startsWith(prefix)) ? value : preferred + value;
+}
+
+function composeLocality(parts: Locality) {
+  const bangkok = /กรุงเทพ|Bangkok/i.test(parts.province);
+  const pieces = [
+    withPrefix(parts.tambon, TAMBON_PREFIXES, bangkok ? "แขวง" : "ตำบล"),
+    withPrefix(parts.amphoe, AMPHOE_PREFIXES, bangkok ? "เขต" : "อำเภอ"),
+    parts.province,
+    parts.postcode,
+  ];
+  return pieces.filter(Boolean).join(" ");
+}
+
 async function lookupGoogle(lat: number, lng: number, key: string) {
   const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
   url.searchParams.set("latlng", `${lat},${lng}`);
   url.searchParams.set("language", "th");
   url.searchParams.set("region", "TH");
+  url.searchParams.set("result_type", "sublocality|locality|administrative_area_level_1|administrative_area_level_2");
   url.searchParams.set("key", key);
   const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(6_000) });
   if (!response.ok) return "";
-  const payload = await response.json() as { status?: string; results?: { formatted_address?: string }[] };
+  const payload = await response.json() as {
+    status?: string;
+    results?: { address_components?: { long_name?: string; types?: string[] }[] }[];
+  };
   if (payload.status !== "OK") return "";
-  return String(payload.results?.[0]?.formatted_address || "");
+
+  const byType: Record<string, string> = {};
+  for (const result of payload.results || []) {
+    for (const component of result.address_components || []) {
+      for (const type of component.types || []) {
+        if (!byType[type]) byType[type] = String(component.long_name || "");
+      }
+    }
+  }
+  return composeLocality({
+    tambon: firstOf(byType, ["sublocality_level_2", "sublocality_level_1", "sublocality", "administrative_area_level_3", "neighborhood"]),
+    amphoe: firstOf(byType, ["administrative_area_level_2", "locality"]),
+    province: firstOf(byType, ["administrative_area_level_1"]),
+    postcode: firstOf(byType, ["postal_code"]),
+  });
 }
 
 async function lookupNominatim(lat: number, lng: number) {
@@ -54,7 +102,8 @@ async function lookupNominatim(lat: number, lng: number) {
   url.searchParams.set("format", "jsonv2");
   url.searchParams.set("lat", String(lat));
   url.searchParams.set("lon", String(lng));
-  url.searchParams.set("zoom", "18");
+  url.searchParams.set("zoom", "16");
+  url.searchParams.set("addressdetails", "1");
   url.searchParams.set("accept-language", "th");
   const response = await fetch(url, {
     cache: "no-store",
@@ -63,8 +112,34 @@ async function lookupNominatim(lat: number, lng: number) {
     headers: { "User-Agent": "T-TIME-Attendance/1.0 (https://chk-in-out.vercel.app)", accept: "application/json" },
   });
   if (!response.ok) return "";
-  const payload = await response.json() as { display_name?: string };
-  return String(payload.display_name || "");
+  const payload = await response.json() as { address?: Record<string, string | undefined>; display_name?: string };
+  const address = payload.address;
+  if (!address) return String(payload.display_name || "");
+
+  // ชื่อไทยจาก OSM มีคำนำหน้าติดมาอยู่แล้ว (ตำบล.../อำเภอ.../จังหวัด...) แยกจากคำนำหน้าจึงแม่นกว่า
+  // ดูจากชื่อฟิลด์ เพราะ Thailand ใช้ city_district เป็นตำบล และ county เป็นอำเภอ ซึ่งสวนทางกับชื่อฟิลด์
+  const parts = { tambon: "", amphoe: "", province: "" };
+  for (const [key, raw] of Object.entries(address)) {
+    if (key === "country_code" || key.startsWith("ISO")) continue;
+    const value = String(raw || "").trim();
+    if (!value) continue;
+    if (!parts.tambon && TAMBON_PREFIXES.some((prefix) => value.startsWith(prefix))) parts.tambon = value;
+    else if (!parts.amphoe && AMPHOE_PREFIXES.some((prefix) => value.startsWith(prefix))) parts.amphoe = value;
+    else if (!parts.province && value.startsWith("จังหวัด")) parts.province = value;
+  }
+
+  const tambon = parts.tambon || firstOf(address, ["suburb", "quarter", "village", "neighbourhood", "hamlet"]);
+  const amphoe = parts.amphoe || firstOf(address, ["county", "city_district", "district", "municipality", "town", "city"]);
+  // กรุงเทพฯ ไม่มีฟิลด์จังหวัด ชื่อ "กรุงเทพมหานคร" มาในฟิลด์ city จึงต้องเผื่อไว้ แต่กันไม่ให้ซ้ำกับอำเภอ
+  const province = parts.province || firstOf(address, ["province", "state", "city"]);
+  const locality = composeLocality({
+    tambon,
+    amphoe,
+    province: province === amphoe ? "" : province,
+    postcode: firstOf(address, ["postcode"]),
+  });
+  // บางจุด OSM ไม่มีข้อมูลเขตการปกครองครบ ใช้ชื่อยาวของมันไปก่อนดีกว่าไม่แสดงอะไรเลย
+  return locality || String(payload.display_name || "");
 }
 
 export async function GET(request: Request) {
