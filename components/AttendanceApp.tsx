@@ -29,16 +29,20 @@ type ApiResponse = Record<string, unknown> & { ok?: boolean; error?: string };
 type View = "today" | "history" | "dashboard" | "report" | "users" | "settings";
 type LocationHelp = { href: string | null; instructions: string };
 type ReportStatus = "all" | "complete" | "open";
+type EvidencePreview =
+  | { type: "photo"; url: string; label: string }
+  | { type: "map"; lat: number; lng: number; label: string };
 
 const REPORT_PAGE_SIZE = 25;
 
 type MapProvider = "google" | "osm";
 const MapProviderContext = createContext<MapProvider>("osm");
+const EvidencePreviewContext = createContext<(preview: EvidencePreview) => void>(() => undefined);
 
 // ขนาดกรอบหลักฐาน (พิกเซล) — ใช้ทั้งแผนที่และรูปถ่ายให้เท่ากันพอดี และส่งให้ Static Maps ตรง ๆ
 const MAP_SIZES = {
   card: { width: 192, height: 114 },
-  table: { width: 146, height: 91 },
+  table: { width: 132, height: 82 },
 } as const;
 
 type WorkSettings = { work_start: string; work_end: string; late_grace_minutes: string };
@@ -183,55 +187,6 @@ function formatDay(value: string) {
 function formatMonth(value: string) {
   const date = attendanceDate(value);
   return date ? new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "Asia/Bangkok" }).format(date) : "—";
-}
-
-const OLC_ALPHABET = "23456789CFGHJMPQRVWX";
-const OLC_LAT_PRECISION = 25_000_000;
-const OLC_LNG_PRECISION = 8_192_000;
-const PLUS_CODE_PATTERN = /^[23456789CFGHJMPQRVWX]{2,8}\+[23456789CFGHJMPQRVWX]{2,3}\s*/i;
-
-/**
- * Plus Code (Open Location Code) ของ Google คำนวณจากพิกัดได้ตรง ๆ ไม่ต้องเรียกบริการภายนอก
- * จึงขึ้นทันทีที่เปิดตาราง ส่วนชื่อตำบล/อำเภอค่อยเติมทีหลังเมื่อผลค้นที่อยู่กลับมา
- */
-function plusCode(lat: number, lng: number) {
-  const latitude = Math.min(90, Math.max(-90, lat));
-  let longitude = lng;
-  while (longitude < -180) longitude += 360;
-  while (longitude >= 180) longitude -= 360;
-
-  let latValue = Math.floor(Math.round((latitude + 90) * OLC_LAT_PRECISION * 1e6) / 1e6);
-  let lngValue = Math.floor(Math.round((longitude + 180) * OLC_LNG_PRECISION * 1e6) / 1e6);
-  if (latValue >= 180 * OLC_LAT_PRECISION) latValue = 180 * OLC_LAT_PRECISION - 1;
-
-  let code = "";
-  // ห้าหลักท้ายเป็นตารางย่อย 4x5 ต่อหนึ่งขั้น
-  for (let step = 0; step < 5; step += 1) {
-    code = OLC_ALPHABET.charAt((latValue % 5) * 4 + (lngValue % 4)) + code;
-    latValue = Math.floor(latValue / 5);
-    lngValue = Math.floor(lngValue / 4);
-  }
-  // สิบหลักแรกเป็นคู่ละติจูด/ลองจิจูด ฐาน 20
-  for (let step = 0; step < 5; step += 1) {
-    code = OLC_ALPHABET.charAt(latValue % 20) + OLC_ALPHABET.charAt(lngValue % 20) + code;
-    latValue = Math.floor(latValue / 20);
-    lngValue = Math.floor(lngValue / 20);
-  }
-  return `${code.slice(0, 8)}+${code.slice(8, 11)}`;
-}
-
-/** รูปสั้นที่ Google แสดงคู่กับชื่อพื้นที่ เช่น 3V5X+63G */
-function shortPlusCode(full: string) {
-  return full.slice(4);
-}
-
-/** ตัด Plus Code ที่ผู้ให้บริการใส่มาข้างหน้าออก เหลือแต่ชื่อตำบล/อำเภอ/จังหวัด */
-function localityOf(address: string | undefined) {
-  return String(address || "").replace(PLUS_CODE_PATTERN, "").trim();
-}
-
-function pointKey(lat: number, lng: number) {
-  return `${lat.toFixed(4)},${lng.toFixed(4)}`;
 }
 
 function mapUrl(lat: number, lng: number) {
@@ -457,12 +412,13 @@ export default function AttendanceApp() {
   const [reportPage, setReportPage] = useState(1);
   const [mapProvider, setMapProvider] = useState<MapProvider>("osm");
   const [workConfig, setWorkConfig] = useState<WorkConfig | null>(null);
-  const [addresses, setAddresses] = useState<Record<string, string>>({});
   const [dashboardMonth, setDashboardMonth] = useState(() => currentMonthKey());
+  const [evidencePreview, setEvidencePreview] = useState<EvidencePreview | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const locationRequest = useRef<Promise<LocationData> | null>(null);
   const allowLineGps = useRef(false);
   const photoUrl = useMemo(() => photo ? URL.createObjectURL(photo) : "", [photo]);
+  const closeEvidencePreview = useCallback(() => setEvidencePreview(null), []);
 
   const canViewAll = user?.role === "admin" || user?.role === "hr";
 
@@ -635,18 +591,6 @@ export default function AttendanceApp() {
       await Promise.all([loadUsers(), loadWorkConfig()]);
     } catch (caught) {
       setMessage({ type: "error", text: thaiError(caught) });
-    }
-  }
-
-  async function openDashboard() {
-    setView("dashboard");
-    setReportLoading(true);
-    try {
-      await Promise.all([reportSource ? Promise.resolve() : loadReportRows(), loadWorkConfig()]);
-    } catch (caught) {
-      setMessage({ type: "error", text: thaiError(caught) });
-    } finally {
-      setReportLoading(false);
     }
   }
 
@@ -856,41 +800,6 @@ export default function AttendanceApp() {
     };
   }, [dashboardMonth, reportSource, rows, workConfig]);
 
-  // ที่อยู่ค้นทีละชุดเฉพาะพิกัดที่ยังไม่รู้จัก — พิกัดซ้ำ (ที่ทำงานเดิม) ใช้คำตอบเดิมได้เลย
-  const addressQueue = useMemo(() => {
-    const keys = new Set<string>();
-    const collect = (lat: number | null, lng: number | null) => {
-      if (lat === null || lng === null || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
-      const key = pointKey(lat, lng);
-      if (!(key in addresses)) keys.add(key);
-    };
-    visibleReportRows.forEach((record) => {
-      collect(record.check_in_lat, record.check_in_lng);
-      collect(record.check_out_lat, record.check_out_lng);
-    });
-    filteredRows.slice(0, 20).forEach((record) => {
-      collect(record.check_in_lat, record.check_in_lng);
-      collect(record.check_out_lat, record.check_out_lng);
-    });
-    return [...keys].slice(0, 40);
-  }, [addresses, filteredRows, visibleReportRows]);
-
-  useEffect(() => {
-    if (!addressQueue.length) return;
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const data = await api(`/api/address?points=${encodeURIComponent(addressQueue.join("|"))}`);
-          if (!cancelled) setAddresses((current) => ({ ...current, ...(data.addresses as Record<string, string>) }));
-        } catch {
-          // ที่อยู่เป็นข้อมูลเสริม ค้นไม่ได้ก็ยังดูพิกัดกับแผนที่ได้ตามปกติ
-        }
-      })();
-    }, 350);
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [addressQueue]);
-
   const reportDownloadUrl = useMemo(() => {
     const params = new URLSearchParams();
     if (reportFrom) params.set("from", reportFrom);
@@ -910,13 +819,13 @@ export default function AttendanceApp() {
   const statusText = todayState === "not-started" ? "ยังไม่ได้เข้างาน" : todayState === "working" ? "กำลังทำงาน" : "บันทึกครบแล้ว";
   return (
     <MapProviderContext value={mapProvider}>
-    <main className="app-shell">
+      <EvidencePreviewContext value={setEvidencePreview}>
+      <main className="app-shell">
       <header className="topbar">
         <button className="logo-button" type="button" onClick={() => setView("today")}><Logo /></button>
         <nav className="desktop-nav" aria-label="เมนูหลัก">
           <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}>วันนี้</button>
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>ประวัติ</button>
-          {(user.role === "admin" || user.role === "hr") && <button className={view === "dashboard" ? "active" : ""} onClick={() => void openDashboard()}>แดชบอร์ด</button>}
           {(user.role === "admin" || user.role === "hr") && <button className={view === "report" ? "active" : ""} onClick={() => void openReport()}>รายงาน</button>}
           {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}>ผู้ใช้งาน</button>}
           {user.role === "admin" && <button className={view === "settings" ? "active" : ""} onClick={() => void openSettings()}>ตั้งค่า</button>}
@@ -961,6 +870,8 @@ export default function AttendanceApp() {
           </section>
         </div>
       )}
+
+      {evidencePreview && <EvidencePopup preview={evidencePreview} onClose={closeEvidencePreview} />}
 
       {view === "today" && (
         <section className="dashboard" id="top">
@@ -1027,7 +938,7 @@ export default function AttendanceApp() {
             <span><small>บันทึกครบ</small><strong>{filteredRows.filter((row) => row.check_out_at).length}</strong></span>
             <span><small>ยังไม่เลิกงาน</small><strong>{filteredRows.filter((row) => !row.check_out_at).length}</strong></span>
           </div>
-          <AttendanceTable rows={filteredRows} addresses={addresses} showNames={Boolean(canViewAll)} />
+          <AttendanceTable rows={filteredRows} showNames={Boolean(canViewAll)} />
         </section>
       )}
 
@@ -1151,7 +1062,7 @@ export default function AttendanceApp() {
               <div><p className="eyebrow">ATTENDANCE DETAILS</p><h2 id="report-detail-heading">รายละเอียดการลงเวลา</h2></div>
               <span>หน้า {safeReportPage} / {reportPageCount} · {filteredReportRows.length.toLocaleString("th-TH")} รายการ</span>
             </div>
-            <AttendanceTable rows={visibleReportRows} addresses={addresses} showNames />
+            <AttendanceTable rows={visibleReportRows} showNames />
             {reportPageCount > 1 && <div className="report-pagination"><button type="button" disabled={safeReportPage <= 1} onClick={() => setReportPage((page) => Math.max(1, page - 1))}>← ก่อนหน้า</button><span>{((safeReportPage - 1) * REPORT_PAGE_SIZE) + 1}–{Math.min(safeReportPage * REPORT_PAGE_SIZE, filteredReportRows.length)} จาก {filteredReportRows.length}</span><button type="button" disabled={safeReportPage >= reportPageCount} onClick={() => setReportPage((page) => Math.min(reportPageCount, page + 1))}>ถัดไป →</button></div>}
           </section>
         </section>
@@ -1236,76 +1147,65 @@ export default function AttendanceApp() {
       <nav className="mobile-nav" aria-label="เมนูหลักบนมือถือ">
         <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}><b>●</b><span>วันนี้</span></button>
         <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}><b>≡</b><span>ประวัติ</span></button>
-        {(user.role === "admin" || user.role === "hr") && <button className={view === "dashboard" ? "active" : ""} onClick={() => void openDashboard()}><b>◍</b><span>แดชบอร์ด</span></button>}
         {(user.role === "admin" || user.role === "hr") && <button className={view === "report" ? "active" : ""} onClick={() => void openReport()}><b>▤</b><span>รายงาน</span></button>}
         {user.role === "admin" && <button className={view === "users" ? "active" : ""} onClick={openUsers}><b>+</b><span>ผู้ใช้งาน</span></button>}
         {user.role === "admin" && <button className={view === "settings" ? "active" : ""} onClick={() => void openSettings()}><b>⚙</b><span>ตั้งค่า</span></button>}
       </nav>
-    </main>
+      </main>
+      </EvidencePreviewContext>
     </MapProviderContext>
   );
 }
 
 function PhotoThumbnail({ url, alt, caption, variant = "card" }: { url: string; alt: string; caption: string; variant?: keyof typeof MAP_SIZES }) {
   const { width, height } = MAP_SIZES[variant];
+  const openPreview = useContext(EvidencePreviewContext);
   if (!url) return <div className="photo-thumbnail is-empty" style={{ width, height, maxWidth: "100%" } satisfies CSSProperties}>ไม่มีรูป</div>;
 
   return (
     <div className="photo-thumbnail" style={{ width, maxWidth: "100%" } satisfies CSSProperties}>
-      <a className="photo-thumbnail-canvas" style={{ height }} href={url} target="_blank" rel="noreferrer">
+      <button className="photo-thumbnail-canvas" style={{ height }} type="button" onClick={() => openPreview({ type: "photo", url, label: alt })} aria-label={`เปิด${alt}ในหน้าต่างป๊อปอัป`}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={url} alt={alt} loading="lazy" />
-      </a>
+      </button>
       <span className="photo-thumbnail-link">{caption}</span>
     </div>
   );
 }
 
 /** หลักฐาน 1 ชุด = รูปที่ถ่ายไว้ + แผนที่จุดที่บันทึก วางคู่กันในขนาดเท่ากัน */
-function PlaceCell({ lat, lng, addresses }: { lat: number; lng: number; addresses: Record<string, string> }) {
-  const full = plusCode(lat, lng);
-  const key = pointKey(lat, lng);
-  const locality = localityOf(addresses[key]);
-  // แยก "ยังไม่ได้ค้น" ออกจาก "ค้นแล้วไม่เจอ" ไม่งั้นข้อความกำลังโหลดจะค้างอยู่ตลอด
-  const resolved = key in addresses;
-  return (
-    <>
-      <a href={mapUrl(lat, lng)} target="_blank" rel="noreferrer" title={full}>{shortPlusCode(full)}</a>
-      <small className="place-locality">
-        {locality || (resolved ? `พิกัด ${lat.toFixed(5)}, ${lng.toFixed(5)}` : "กำลังค้นหาตำบล/อำเภอ/จังหวัด…")}
-      </small>
-    </>
-  );
-}
-
 function EvidenceCell({ photoUrl, owner, lat, lng, label }: { photoUrl: string; owner: string; lat: number; lng: number; label: string }) {
   return (
     <div className="evidence-cell">
-      <PhotoThumbnail url={photoUrl} alt={`${label} ${owner}`} caption="ดูรูปเต็ม ↗" variant="table" />
+      <PhotoThumbnail url={photoUrl} alt={`${label} ${owner}`} caption="รูปถ่าย · แตะเพื่อขยาย" variant="table" />
       <MapThumbnail lat={lat} lng={lng} label={label} variant="table" />
     </div>
   );
 }
 
 /** ตารางเดียวใช้ทั้งหน้าประวัติและหน้ารายงาน — เข้างานกับเลิกงานอยู่แถวเดียวกัน */
-function AttendanceTable({ rows, addresses, showNames = false }: { rows: Attendance[]; addresses: Record<string, string>; showNames?: boolean }) {
+function AttendanceTable({ rows, showNames = false }: { rows: Attendance[]; showNames?: boolean }) {
   if (!rows.length) return <div className="empty-state"><span>○</span><h3>ไม่พบข้อมูล</h3><p>ลองเปลี่ยนช่วงวันที่หรือเงื่อนไขตัวกรอง</p></div>;
 
   return (
     <div className="report-table-scroll">
       <table className="report-table attendance-table">
         <thead>
-          <tr>
+          <tr className="attendance-group-head">
+            <th colSpan={showNames ? 2 : 1}>ข้อมูลรายการ</th>
+            <th colSpan={2}>สรุปเวลา</th>
+            <th colSpan={2} className="group-check-in">เข้างาน</th>
+            <th colSpan={2} className="group-check-out">เลิกงาน</th>
+          </tr>
+          <tr className="attendance-column-head">
             <th>วันที่</th>
             {showNames ? <th>พนักงาน</th> : null}
             <th>ชั่วโมง</th>
             <th>สถานะ</th>
-            <th>เข้างาน</th>
-            <th>หลักฐานเข้างาน</th>
-            <th>สถานที่เข้างาน</th>
-            <th>เลิกงาน</th>
-            <th>หลักฐานเลิกงาน</th>
-            <th>สถานที่เลิกงาน</th>
+            <th>เวลา</th>
+            <th>รูปและแผนที่</th>
+            <th>เวลา</th>
+            <th>รูปและแผนที่</th>
           </tr>
         </thead>
         <tbody>
@@ -1317,17 +1217,15 @@ function AttendanceTable({ rows, addresses, showNames = false }: { rows: Attenda
                 {showNames ? <td className="cell-name"><strong>{record.name}</strong><small>@{record.username}</small></td> : null}
                 <td className="cell-time">{formatHours(workHours(record))}</td>
                 <td><span className={`complete-badge ${closed ? "complete" : "pending"}`}>{closed ? "ครบถ้วน" : "กำลังทำงาน"}</span></td>
-                <td className="cell-time"><span className="type-badge in">เข้างาน</span><small>{formatTime(record.check_in_at)}</small></td>
+                <td className="cell-time cell-check-in"><strong>{formatTime(record.check_in_at)}</strong><small>น.</small></td>
                 <td><EvidenceCell photoUrl={record.check_in_photo_url} owner={record.name} lat={record.check_in_lat} lng={record.check_in_lng} label="จุดเข้างาน" /></td>
-                <td className="cell-address"><PlaceCell lat={record.check_in_lat} lng={record.check_in_lng} addresses={addresses} /></td>
                 {closed ? (
                   <>
-                    <td className="cell-time"><span className="type-badge out">เลิกงาน</span><small>{formatTime(record.check_out_at)}</small></td>
+                    <td className="cell-time cell-check-out"><strong>{formatTime(record.check_out_at)}</strong><small>น.</small></td>
                     <td><EvidenceCell photoUrl={record.check_out_photo_url || ""} owner={record.name} lat={record.check_out_lat as number} lng={record.check_out_lng as number} label="จุดเลิกงาน" /></td>
-                    <td className="cell-address"><PlaceCell lat={record.check_out_lat as number} lng={record.check_out_lng as number} addresses={addresses} /></td>
                   </>
                 ) : (
-                  <td className="cell-waiting" colSpan={3}>ยังไม่เลิกงาน</td>
+                  <td className="cell-waiting" colSpan={2}>ยังไม่เลิกงาน</td>
                 )}
               </tr>
             );
@@ -1340,14 +1238,48 @@ function AttendanceTable({ rows, addresses, showNames = false }: { rows: Attenda
 
 function MapThumbnail({ lat, lng, label, variant = "card" }: { lat: number; lng: number; label: string; variant?: keyof typeof MAP_SIZES }) {
   const provider = useContext(MapProviderContext);
+  const openPreview = useContext(EvidencePreviewContext);
   const { width, height } = MAP_SIZES[variant];
 
   return (
     <div className="map-thumbnail" style={{ width, maxWidth: "100%" } satisfies CSSProperties}>
       <div className="map-thumbnail-canvas" style={{ height }}>
         {provider === "google" ? <GoogleMapImage lat={lat} lng={lng} label={label} width={width} height={height} /> : <GoogleMapEmbed lat={lat} lng={lng} label={label} />}
+        <button className="map-thumbnail-trigger" type="button" onClick={() => openPreview({ type: "map", lat, lng, label })} aria-label={`เปิดแผนที่${label}ในหน้าต่างป๊อปอัป`} />
       </div>
-      <a className="map-thumbnail-link" href={mapUrl(lat, lng)} target="_blank" rel="noreferrer">{label} · เปิดแผนที่เต็มจอ ↗</a>
+      <span className="map-thumbnail-link">{label} · แตะเพื่อขยาย</span>
+    </div>
+  );
+}
+
+function EvidencePopup({ preview, onClose }: { preview: EvidencePreview; onClose: () => void }) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose]);
+
+  const title = preview.type === "photo" ? preview.label : `แผนที่${preview.label}`;
+  return (
+    <div className="evidence-popup-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className={`evidence-popup evidence-popup-${preview.type}`} role="dialog" aria-modal="true" aria-labelledby="evidence-popup-title">
+        <header>
+          <div><p className="eyebrow">หลักฐานการลงเวลา</p><h2 id="evidence-popup-title">{title}</h2></div>
+          <button className="evidence-popup-close" type="button" onClick={onClose} aria-label="ปิดหน้าต่างป๊อปอัป">×</button>
+        </header>
+        <div className="evidence-popup-content">
+          {preview.type === "photo" ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={preview.url} alt={preview.label} />
+          ) : <GoogleMapEmbed lat={preview.lat} lng={preview.lng} label={preview.label} />}
+        </div>
+        {preview.type === "map" && <a className="evidence-popup-external" href={mapUrl(preview.lat, preview.lng)} target="_blank" rel="noreferrer">เปิดใน Google Maps ↗</a>}
+      </section>
     </div>
   );
 }
