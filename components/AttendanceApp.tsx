@@ -88,6 +88,12 @@ const errorLabels: Record<string, string> = {
   check_out_before_check_in: "เวลาเลิกงานต้องอยู่หลังเวลาเข้างาน",
   attendance_not_found: "ไม่พบรายการลงเวลานี้",
   duplicate_work_date: "พนักงานคนนี้มีรายการในวันที่เลือกอยู่แล้ว",
+  user_not_found: "ไม่พบบัญชีผู้ใช้นี้",
+  invalid_user: "ไม่พบบัญชีผู้ใช้นี้",
+  invalid_role: "ตำแหน่งไม่ถูกต้อง",
+  last_admin: "ต้องเหลือผู้ดูแลระบบที่ใช้งานอยู่อย่างน้อย 1 คน",
+  cannot_disable_self: "ปิดการใช้งานบัญชีของตัวเองไม่ได้",
+  nothing_to_update: "ยังไม่ได้แก้ไขข้อมูลใด",
 };
 
 async function api(path: string, init?: RequestInit) {
@@ -393,6 +399,7 @@ export default function AttendanceApp() {
   const [rows, setRows] = useState<Attendance[]>([]);
   const [today, setToday] = useState<Attendance | null>(null);
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [photo, setPhoto] = useState<File | null>(null);
   const [location, setLocation] = useState<LocationData | null>(null);
   const [locating, setLocating] = useState(false);
@@ -675,6 +682,69 @@ export default function AttendanceApp() {
       });
       form.reset();
       setMessage({ type: "success", text: "เพิ่มผู้ใช้งานเรียบร้อย" });
+      await loadUsers();
+    } catch (caught) {
+      setMessage({ type: "error", text: thaiError(caught) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** บันทึกการแก้ไขบัญชี — รหัสผ่านที่เว้นว่างไว้แปลว่าไม่เปลี่ยน */
+  async function saveUser(event: FormEvent<HTMLFormElement>, member: ManagedUser) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    const fields = new FormData(event.currentTarget);
+    const name = String(fields.get("name") || "").trim();
+    const role = String(fields.get("role") || "");
+    const password = String(fields.get("password") || "");
+
+    const changes: Record<string, string> = { id: member.id };
+    if (name !== member.name) changes.name = name;
+    if (role !== member.role) changes.role = role;
+    if (password) changes.password = password;
+
+    if (Object.keys(changes).length === 1) {
+      setBusy(false);
+      setEditingUserId(null);
+      return;
+    }
+
+    try {
+      await api("/api/users", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(changes),
+      });
+      setEditingUserId(null);
+      setMessage({ type: "success", text: `บันทึกข้อมูลของ ${name} เรียบร้อย` });
+      await loadUsers();
+    } catch (caught) {
+      setMessage({ type: "error", text: thaiError(caught) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** ปิดหรือเปิดการใช้งานบัญชี — ไม่ลบแถวทิ้ง ประวัติลงเวลาเดิมจึงยังอ้างชื่อได้ */
+  async function toggleUserActive(member: ManagedUser) {
+    const nextActive = !member.active;
+    const confirmText = nextActive
+      ? `เปิดการใช้งานบัญชีของ ${member.name} ใช่หรือไม่?`
+      : `ปิดการใช้งานบัญชีของ ${member.name} ใช่หรือไม่? บัญชีนี้จะเข้าสู่ระบบไม่ได้ แต่ประวัติลงเวลาเดิมยังอยู่ครบ`;
+    if (!window.confirm(confirmText)) return;
+
+    setBusy(true);
+    setMessage(null);
+    try {
+      await api("/api/users", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: member.id, active: nextActive }),
+      });
+      setEditingUserId(null);
+      setMessage({ type: "success", text: nextActive ? `เปิดการใช้งาน ${member.name} แล้ว` : `ปิดการใช้งาน ${member.name} แล้ว` });
       await loadUsers();
     } catch (caught) {
       setMessage({ type: "error", text: thaiError(caught) });
@@ -1085,10 +1155,36 @@ export default function AttendanceApp() {
             <div className="user-list">
               <div className="user-list-head"><h2>บัญชีทั้งหมด</h2><span>{managedUsers.length} คน</span></div>
               {managedUsers.map((member) => (
-                <article className="user-row" key={member.id}>
-                  <span className="avatar">{member.name.charAt(0)}</span>
-                  <span><strong>{member.name}</strong><small>@{member.username}</small></span>
-                  <span className={`role-badge role-${member.role}`}>{roleLabels[member.role]}</span>
+                <article className={`user-row${member.active ? "" : " is-inactive"}${editingUserId === member.id ? " is-editing" : ""}`} key={member.id}>
+                  <div className="user-row-main">
+                    <span className="avatar">{member.name.charAt(0)}</span>
+                    <span><strong>{member.name}</strong><small>@{member.username}</small></span>
+                    <span className={`role-badge role-${member.role}`}>{roleLabels[member.role]}</span>
+                    {!member.active && <span className="inactive-badge">ปิดใช้งาน</span>}
+                    <button
+                      className="user-edit-toggle"
+                      type="button"
+                      aria-expanded={editingUserId === member.id}
+                      onClick={() => setEditingUserId((current) => current === member.id ? null : member.id)}
+                    >
+                      {editingUserId === member.id ? "ปิด" : "แก้ไข"}
+                    </button>
+                  </div>
+
+                  {editingUserId === member.id && (
+                    <form className="user-edit-form" onSubmit={(event) => void saveUser(event, member)}>
+                      <label>ชื่อที่ใช้แสดง<input name="name" defaultValue={member.name} minLength={2} required /></label>
+                      <label>ตำแหน่ง<select name="role" defaultValue={member.role}>{Object.entries(roleLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+                      <label className="user-edit-password">รหัสผ่านใหม่<input name="password" type="password" minLength={8} placeholder="เว้นว่างไว้ถ้าไม่เปลี่ยน" autoComplete="new-password" /></label>
+                      <p className="user-edit-note">ชื่อผู้ใช้ <strong>@{member.username}</strong> เปลี่ยนไม่ได้ เพราะประวัติลงเวลาอ้างอิงอยู่</p>
+                      <div className="user-edit-actions">
+                        <button className="submit-button" disabled={busy}>{busy ? "กำลังบันทึก…" : "บันทึกการแก้ไข"}</button>
+                        <button className={member.active ? "user-disable" : "user-enable"} type="button" disabled={busy} onClick={() => void toggleUserActive(member)}>
+                          {member.active ? "ปิดการใช้งาน" : "เปิดการใช้งาน"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </article>
               ))}
             </div>

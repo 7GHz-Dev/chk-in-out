@@ -324,11 +324,33 @@ button:disabled { cursor: not-allowed; }
 .user-form h2, .user-list h2 { margin: 0; font-size: 22px; }
 .user-list-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
 .user-list-head span { color: var(--muted); font-size: 15px; }
-.user-row { padding: 13px 0; display: grid; grid-template-columns: auto 1fr auto; gap: 11px; align-items: center; border-bottom: 1px solid #e9ece7; }
+.user-row { padding: 13px 0; border-bottom: 1px solid #e9ece7; }
 .user-row:last-child { border-bottom: 0; }
-.user-row > span:nth-child(2) { min-width: 0; display: grid; }
-.user-row > span:nth-child(2) strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
-.user-row > span:nth-child(2) small { color: var(--muted); font-size: 13px; }
+.user-row.is-inactive .user-row-main { opacity: .55; }
+.user-row-main { display: grid; grid-template-columns: auto 1fr auto auto; gap: 11px; align-items: center; }
+.user-row-main > span:nth-child(2) { min-width: 0; display: grid; }
+.user-row-main > span:nth-child(2) strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
+.user-row-main > span:nth-child(2) small { color: var(--muted); font-size: 13px; }
+.inactive-badge { padding: 6px 9px; border-radius: 999px; background: #f6e2e2; color: #a33b3b; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.user-edit-toggle { min-height: 36px; padding: 0 14px; border: 1px solid var(--line); border-radius: 11px; background: white; color: var(--ink); font-size: 13px; font-weight: 800; }
+.user-edit-toggle:hover { border-color: var(--brand); color: var(--brand-dark); }
+
+/* ฟอร์มแก้ไขกางอยู่ใต้แถวของคนนั้น จึงเห็นชัดว่ากำลังแก้ของใคร */
+.user-edit-form { margin-top: 13px; padding: 17px; border: 1px solid var(--line); border-radius: 16px; background: #fafbf8; }
+.user-edit-form label { display: grid; gap: 7px; margin-top: 14px; font-size: 14px; font-weight: 800; }
+.user-edit-form label:first-child { margin-top: 0; }
+.user-edit-form input, .user-edit-form select { width: 100%; height: 46px; padding: 0 13px; border: 1px solid var(--line); border-radius: 12px; background: white; color: var(--ink); font-size: 16px; font-weight: 500; }
+.user-edit-form input:focus, .user-edit-form select:focus { border-color: var(--brand); outline: 3px solid rgba(237, 95, 66, .11); }
+.user-edit-note { margin: 13px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.user-edit-note strong { color: #4f5d57; }
+.user-edit-actions { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 10px; }
+.user-edit-actions .submit-button { width: auto; flex: 1 1 190px; min-height: 46px; margin-top: 0; padding: 0 18px; }
+.user-disable, .user-enable { flex: 0 0 auto; min-height: 46px; padding: 0 18px; border: 1px solid; border-radius: 14px; background: white; font-size: 14px; font-weight: 800; }
+.user-disable { border-color: #e6bcbc; color: #a33b3b; }
+.user-disable:hover:not(:disabled) { background: #fbf0f0; }
+.user-enable { border-color: #b9ddc7; color: #1c7a4f; }
+.user-enable:hover:not(:disabled) { background: #f0f9f3; }
+.user-disable:disabled, .user-enable:disabled { opacity: .6; }
 .role-badge { padding: 6px 9px; border-radius: 999px; background: #eef1ec; color: #4f5d57; font-size: 12px; font-weight: 800; }
 .role-admin { background: #ffe9e3; color: #a13928; }
 .role-hr { background: #e3edf9; color: #305f91; }
@@ -407,6 +429,9 @@ button:disabled { cursor: not-allowed; }
   .report-pagination { justify-content: space-between; gap: 7px; }
   .report-pagination button { padding: 0 9px; }
   .user-form, .user-list { padding: 19px; }
+  .user-row-main { grid-template-columns: auto 1fr auto; }
+  .user-edit-toggle { grid-column: 1 / -1; width: 100%; }
+  .user-edit-actions .submit-button, .user-disable, .user-enable { flex: 1 1 100%; }
   .role-badge { max-width: 100px; text-align: center; }
 }
 

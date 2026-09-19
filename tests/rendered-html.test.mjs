@@ -3,13 +3,14 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("ships T TIME metadata and removes the starter preview", async () => {
-  const [page, layout, client, backend, report, workConfig] = await Promise.all([
+  const [page, layout, client, backend, report, workConfig, users] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/AttendanceApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8"),
     readFile(new URL("../app/api/report/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/work-config/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/users/route.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /AttendanceApp/);
@@ -45,11 +46,26 @@ test("ships T TIME metadata and removes the starter preview", async () => {
   assert.doesNotMatch(client, />แดชบอร์ด<\/button>/);
   assert.doesNotMatch(client, /EvidencePair/);
   assert.doesNotMatch(client, /จัดการเวลา/);
+  assert.match(client, /user-edit-form/);
+  assert.match(client, /async function saveUser/);
+  assert.match(client, /async function toggleUserActive/);
+  assert.match(client, /method: "PATCH"/);
+  assert.match(client, /method: "DELETE"/);
   assert.match(backend, /function ttnWorkDate_/);
   assert.match(backend, /work_date: ttnWorkDate_/);
   assert.match(backend, /Math\.min\(5000/);
   assert.match(backend, /function ttnWorkConfig_/);
   assert.match(backend, /function ttnSavePayroll_/);
+  assert.match(backend, /function ttnUpdateUser_/);
+  assert.match(backend, /function ttnSetUserActive_/);
+  assert.match(backend, /case "updateUser"/);
+  assert.match(backend, /case "setUserActive"/);
+  assert.match(backend, /throw new Error\("last_admin"\)/);
+  assert.match(users, /export async function PATCH/);
+  assert.match(users, /export async function DELETE/);
+  assert.match(users, /cannot_disable_self/);
+  // ทุก handler ของหน้าผู้ใช้ต้องกันคนที่ไม่ใช่แอดมินออกก่อนแตะข้อมูล
+  assert.equal(users.match(/admin\.role !== "admin"/g)?.length, 3);
   assert.match(workConfig, /user\.role !== "admin" && user\.role !== "hr"/);
   assert.match(workConfig, /backendReady/);
   assert.match(report, /user\.role !== "admin" && user\.role !== "hr"/);

@@ -54,6 +54,8 @@ function ttnDispatch_(action, body) {
     case "createFirstAdmin": return { user: ttnCreateFirstAdmin_(body.user || {}) };
     case "listUsers": return { users: ttnListUsers_() };
     case "createUser": return { user: ttnCreateUser_(body.user || {}) };
+    case "updateUser": return { user: ttnUpdateUser_(body.user || {}) };
+    case "setUserActive": return { user: ttnSetUserActive_(body) };
     case "listAttendance": return ttnListAttendance_(body);
     case "recordAttendance": return ttnRecordAttendance_(body);
     case "updateAttendance": return ttnUpdateAttendance_(body);
@@ -190,14 +192,23 @@ function ttnValidateUser_(input, firstAdmin) {
 }
 
 function ttnWriteUser_(sheet, rowNumber, user) {
+  const active = user.active !== false;
   sheet.getRange(rowNumber, 1, 1, TTN_USER_COLUMNS).setValues([[
     user.id, user.username, user.passwordHash, user.passwordSalt, user.name,
-    user.role, true, user.createdAt, user.updatedAt
+    user.role, active, user.createdAt, user.updatedAt
   ]]);
   return {
     id: user.id, username: user.username, name: user.name, role: user.role,
-    active: true, createdAt: user.createdAt, updatedAt: user.updatedAt
+    active: active, createdAt: user.createdAt, updatedAt: user.updatedAt
   };
+}
+
+/** คืนเลขแถวจริงในชีตของผู้ใช้คนนั้น เพื่อเขียนทับเฉพาะแถวที่ต้องการ */
+function ttnUserRowNumber_(rows, userId) {
+  for (let index = 0; index < rows.length; index += 1) {
+    if (String(rows[index][0] || "").trim() === userId) return index + 2;
+  }
+  return 0;
 }
 
 function ttnCreateFirstAdmin_(input) {
@@ -238,6 +249,89 @@ function ttnCreateUser_(input) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * แก้ไขบัญชีที่มีอยู่ — ส่งเฉพาะช่องที่ต้องการเปลี่ยนมาได้ ช่องที่ไม่ได้ส่งจะคงค่าเดิมไว้
+ * รหัสผ่านมาเป็น hash กับ salt ที่ฝั่ง Next.js คำนวณแล้ว ที่นี่ไม่เคยเห็นรหัสผ่านจริง
+ */
+function ttnUpdateUser_(input) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const userId = String(input.id || "").trim();
+    if (!userId) throw new Error("invalid_user");
+
+    const sheet = ttnSheet_("Users");
+    const rows = ttnRows_(sheet, TTN_USER_COLUMNS);
+    const rowNumber = ttnUserRowNumber_(rows, userId);
+    if (!rowNumber) throw new Error("user_not_found");
+    const existing = ttnUserFromRow_(rows[rowNumber - 2], true);
+
+    const name = input.name === undefined ? existing.name : String(input.name).trim();
+    if (name.length < 2) throw new Error("invalid_name");
+
+    const role = input.role === undefined ? existing.role : ttnNormalizeRole_(input.role);
+    const passwordHash = input.passwordHash === undefined ? existing.passwordHash : String(input.passwordHash);
+    const passwordSalt = input.passwordSalt === undefined ? existing.passwordSalt : String(input.passwordSalt);
+    if (!/^[a-f0-9]{64}$/i.test(passwordHash) || !/^[a-f0-9]{32}$/i.test(passwordSalt)) {
+      throw new Error("invalid_password_data");
+    }
+
+    // ถอดสิทธิ์แอดมินคนสุดท้ายออกไม่ได้ ไม่งั้นจะไม่เหลือใครเข้าหน้าจัดการผู้ใช้
+    if (existing.role === "admin" && role !== "admin" && ttnActiveAdminCount_(rows, userId) === 0) {
+      throw new Error("last_admin");
+    }
+
+    return ttnWriteUser_(sheet, rowNumber, {
+      id: existing.id,
+      username: existing.username,
+      passwordHash: passwordHash,
+      passwordSalt: passwordSalt,
+      name: name,
+      role: role,
+      active: existing.active,
+      createdAt: existing.createdAt,
+      updatedAt: new Date().toISOString()
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** ปิด/เปิดการใช้งานบัญชี — เก็บแถวไว้เสมอ ประวัติลงเวลาเดิมจึงยังอ้างชื่อได้ */
+function ttnSetUserActive_(input) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const userId = String(input.userId || "").trim();
+    if (!userId) throw new Error("invalid_user");
+    const active = input.active === true;
+
+    const sheet = ttnSheet_("Users");
+    const rows = ttnRows_(sheet, TTN_USER_COLUMNS);
+    const rowNumber = ttnUserRowNumber_(rows, userId);
+    if (!rowNumber) throw new Error("user_not_found");
+    const existing = ttnUserFromRow_(rows[rowNumber - 2], true);
+
+    if (!active && existing.role === "admin" && ttnActiveAdminCount_(rows, userId) === 0) {
+      throw new Error("last_admin");
+    }
+
+    existing.active = active;
+    existing.updatedAt = new Date().toISOString();
+    return ttnWriteUser_(sheet, rowNumber, existing);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** นับแอดมินที่ยังใช้งานอยู่ โดยไม่นับคนที่กำลังจะถูกแก้ */
+function ttnActiveAdminCount_(rows, exceptUserId) {
+  return rows.filter(function (row) {
+    const candidate = ttnUserFromRow_(row, false);
+    return candidate && candidate.active && candidate.role === "admin" && candidate.id !== exceptUserId;
+  }).length;
 }
 
 /** ชีตตั้งค่า/ค่าจ้างสร้างให้เองตอนเรียกครั้งแรก ผู้ดูแลไม่ต้องไปสร้างเองในสเปรดชีต */

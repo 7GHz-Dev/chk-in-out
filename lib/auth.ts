@@ -159,8 +159,8 @@ export function jsonOk(data: Record<string, unknown> = {}, status = 200) {
 
 export function backendErrorStatus(message: string) {
   if (["username_exists", "setup_already_complete", "already_checked_in", "already_checked_out", "duplicate_work_date"].includes(message)) return 409;
-  if (message === "account_disabled") return 403;
-  if (message === "photo_not_found") return 404;
+  if (["account_disabled", "last_admin"].includes(message)) return 403;
+  if (["user_not_found", "photo_not_found"].includes(message)) return 404;
   if (["backend_not_configured", "backend_not_initialized", "backend_unavailable", "backend_invalid_response"].includes(message)) return 503;
   return 400;
 }
